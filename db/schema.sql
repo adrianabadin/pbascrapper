@@ -4,6 +4,10 @@
 -- Embeddings: vector(2048) - Zhipu embedding-3
 -- =============================================================
 
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "vector";
+CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+
 -- ENUMS
 DO $$ BEGIN
   CREATE TYPE tipo_norma AS ENUM (
@@ -155,11 +159,16 @@ DROP TRIGGER IF EXISTS trg_articulos_updated_at ON articulos;
 CREATE TRIGGER trg_articulos_updated_at
   BEFORE UPDATE ON articulos FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
 
--- TRIGGER: FTS automatico en normas (peso A=resumen, C=observaciones, D=texto_completo)
+-- TRIGGER: FTS automatico en normas (peso A=tipo/numero/anio, B=resumen, C=observaciones, D=texto_completo)
 CREATE OR REPLACE FUNCTION trigger_normas_fts() RETURNS TRIGGER AS $$
 BEGIN
   NEW.fts_vector :=
-    setweight(to_tsvector('spanish', COALESCE(NEW.resumen, '')), 'A') ||
+    setweight(to_tsvector('spanish',
+      COALESCE(NEW.tipo::text, '') || ' ' ||
+      COALESCE(NEW.numero::text, '') || ' ' ||
+      COALESCE(NEW.anio::text, '')
+    ), 'A') ||
+    setweight(to_tsvector('spanish', COALESCE(NEW.resumen, '')), 'B') ||
     setweight(to_tsvector('spanish', COALESCE(NEW.observaciones, '')), 'C') ||
     setweight(to_tsvector('spanish', COALESCE(NEW.texto_completo, '')), 'D');
   RETURN NEW;
@@ -167,7 +176,7 @@ END; $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_normas_fts ON normas;
 CREATE TRIGGER trg_normas_fts
-  BEFORE INSERT OR UPDATE OF resumen, observaciones, texto_completo ON normas
+  BEFORE INSERT OR UPDATE OF tipo, numero, anio, resumen, observaciones, texto_completo ON normas
   FOR EACH ROW EXECUTE FUNCTION trigger_normas_fts();
 
 -- TRIGGER: FTS automatico en articulos (peso A=titulo, B=texto)
@@ -198,3 +207,31 @@ END; $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS trg_resolver_relaciones ON normas;
 CREATE TRIGGER trg_resolver_relaciones
   AFTER INSERT ON normas FOR EACH ROW EXECUTE FUNCTION resolver_relaciones_huerfanas();
+
+-- Cleanup de cola_embeddings cuando se elimina una norma
+CREATE OR REPLACE FUNCTION cleanup_cola_norma() RETURNS TRIGGER AS $$
+BEGIN
+  DELETE FROM cola_embeddings WHERE entidad_tipo = 'norma' AND entidad_id = OLD.id;
+  RETURN OLD;
+END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_cleanup_cola_norma ON normas;
+CREATE TRIGGER trg_cleanup_cola_norma
+  BEFORE DELETE ON normas FOR EACH ROW EXECUTE FUNCTION cleanup_cola_norma();
+
+-- Cleanup de cola_embeddings cuando se elimina un articulo
+CREATE OR REPLACE FUNCTION cleanup_cola_articulo() RETURNS TRIGGER AS $$
+BEGIN
+  DELETE FROM cola_embeddings WHERE entidad_tipo = 'articulo' AND entidad_id = OLD.id;
+  RETURN OLD;
+END; $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_cleanup_cola_articulo ON articulos;
+CREATE TRIGGER trg_cleanup_cola_articulo
+  BEFORE DELETE ON articulos FOR EACH ROW EXECUTE FUNCTION cleanup_cola_articulo();
+
+-- Index faltante en historial_cambios
+CREATE INDEX IF NOT EXISTS idx_historial_norma ON historial_cambios (norma_id, detectado_at DESC);
+
+-- Constraint para relaciones identificables
+-- (no modificar tabla existente, solo agregar si no existe via ALTER TABLE)
