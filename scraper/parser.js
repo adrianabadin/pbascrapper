@@ -32,7 +32,7 @@ function parseListingPage(html) {
  * Parsea la página de detalle de una norma.
  * Retorna metadata + relaciones normativas.
  */
-function parseDetallePage(html, urlCanonica) {
+function parseDetallePage(html, urlCanonica) { // urlCanonica reserved for future: resolving relative links
   const dom = new JSDOM(html);
   const doc = dom.window.document;
 
@@ -133,7 +133,13 @@ function parseTextoActualizado(html) {
   // Regex para detectar inicio de artículo
   const ARTICULO_REGEX = /^(ART[IÍ]CULO|ARTICULO)\s+\d+[°º]?\s*(BIS|TER|QUATER)?\s*[.°-]/i;
 
-  const parrafos = doc.querySelectorAll('p, div');
+  // Get all p and div elements, but exclude divs that contain other p/div elements
+  // (i.e., only process "leaf" elements) to avoid double-processing when p is inside div
+  const allEls = Array.from(doc.querySelectorAll('p, div'));
+  const parrafos = allEls.filter(el => {
+    if (el.tagName === 'DIV' && el.querySelector('p, div')) return false;
+    return true;
+  });
   parrafos.forEach(el => {
     // Buscar strong dentro del elemento que sea un artículo
     const strong = el.querySelector('strong');
@@ -146,7 +152,7 @@ function parseTextoActualizado(html) {
         }
         // Iniciar nuevo artículo
         articuloActual = {
-          numero_articulo: strongText.replace(/[.°-]\s*$/, '').trim(),
+          numero_articulo: strongText.replace(/[\s°º.\-]+$/, '').trim(),
           texto: el.textContent.trim(),
           orden: orden++,
         };
@@ -188,13 +194,13 @@ function inferirTipoRelacion(text) {
   if (text.includes('complementa')) return 'complementa';
   if (text.includes('prorroga') || text.includes('prórroga')) return 'prorroga';
   if (text.includes('sustituye')) return 'sustituye';
-  return 'modifica';
+  return 'otra';  // was 'modifica' — use explicit unknown type
 }
 
 function parseNormaUrl(url) {
   if (!url) return null;
   // Pattern: /ar-b/{tipo}/{anio}/{numero}/{sitio_id}
-  const match = url.match(/\/ar-b\/(\w+)\/(\d{4})\/(\d+)\/(\d+)/);
+  const match = url.match(/\/ar-b\/([\w-]+)\/(\d{4})\/(\d+)\/(\d+)/);
   if (!match) return null;
   const tipoMap = { 'ley': 'ley', 'decreto': 'decreto', 'decreto-ley': 'decreto_ley' };
   return {
