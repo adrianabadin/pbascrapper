@@ -12,7 +12,8 @@ function parseListingPage(html) {
   // Cada resultado tiene un h3 > a con el título y url
   const headings = doc.querySelectorAll('h3 a');
   headings.forEach(link => {
-    const container = link.closest('div') || link.parentElement.parentElement;
+    // Real site wraps each result in .card-content; plain div as fallback for tests
+    const container = link.closest('.card-content') || link.closest('div') || link.parentElement.parentElement;
     const blockquote = container.querySelector('blockquote');
     const parrafos = container.querySelectorAll('p');
 

@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_click",
+      "mcp__playwright__browser_tabs",
+      "mcp__playwright__browser_snapshot",
+      "Bash(npm --version:*)",
+      "Bash(psql:*)",
+      "Bash(npm init:*)",
+      "Bash(ssh -o StrictHostKeyChecking=no hive \"echo ''Gandalf2947%'' | sudo -S apt-get update -qq && echo ''Gandalf2947%'' | sudo -S apt-get install -y postgresql-17-pgvector 2>&1 | tail -5\")",
+      "Bash(ssh:*)",
+      "Bash(/c/Users/Adria/Documents/code/pba/package.json:*)",
+      "Bash(/c/Users/Adria/Documents/code/pba/.env.example:*)",
+      "Bash(/c/Users/Adria/Documents/code/pba/.gitignore:*)",
+      "Bash(/c/Users/Adria/Documents/code/pba/scraper/index.js:*)",
+      "Bash(__NEW_LINE_f70e3f41a01aff3e__ cat)",
+      "Bash(/c/Users/Adria/Documents/code/pba/mcp-server/index.js:*)",
+      "Bash(/c/Users/Adria/Documents/code/pba/.env:*)",
+      "Bash(npm test:*)",
+      "Bash(/c/Users/Adria/Documents/code/pba/db/schema.sql:*)",
+      "Bash(python3:*)",
+      "Bash(printf:*)",
+      "Bash(/c/Users/Adria/AppData/Local/Temp/t.py:*)",
+      "Bash(/c/Users/Adria/AppData/Local/Temp/build_schema.py:*)",
+      "Bash(/c/Users/Adria/AppData/Local/Temp/write_apply.py:*)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs",
+      "Bash(cd /c/Users/Adria/Documents/code/pba && npx jest tests/scraper/parser.test.js --no-coverage 2>&1)"
+    ]
+  }
+}
