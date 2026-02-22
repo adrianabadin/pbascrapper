@@ -4,6 +4,8 @@ const crypto = require('crypto');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
+const ALLOWED_EMBEDDING_CAMPOS = new Set(['embedding_resumen', 'embedding']);
+
 /**
  * Infiere el tipo de norma desde la URL canónica.
  * /ar-b/ley/... → 'ley', /ar-b/decreto/... → 'decreto'
@@ -92,62 +94,75 @@ async function upsertNormaDetalle(sitio_id, detalle) {
 /**
  * Upsert del texto actualizado con detección de cambios por SHA-256.
  * Retorna true si hubo cambio (nuevo hash).
+ * Todas las escrituras se ejecutan dentro de una transacción.
  */
 async function upsertTextoActualizado(normaId, htmlText, articulos) {
   const hashNuevo = crypto.createHash('sha256').update(htmlText).digest('hex');
   const textoCompleto = articulos.map(a => `${a.numero_articulo}. ${a.texto}`).join('\n\n');
 
-  // Verificar hash anterior
+  // Verificar hash anterior (lectura fuera de transacción está bien)
   const { rows } = await pool.query(
     'SELECT texto_actualizado_hash FROM normas WHERE id = $1', [normaId]
   );
   const hashAnterior = rows[0]?.texto_actualizado_hash;
-
   if (hashAnterior === hashNuevo) return false; // Sin cambios
 
-  // Registrar cambio en historial
-  if (hashAnterior) {
-    await pool.query(
-      'INSERT INTO historial_cambios (norma_id, hash_anterior, hash_nuevo) VALUES ($1, $2, $3)',
-      [normaId, hashAnterior, hashNuevo]
-    );
-  }
+  // Todo lo que sigue va en transacción
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  // Actualizar texto en norma
-  await pool.query(`
-    UPDATE normas SET
-      texto_completo = $1,
-      texto_actualizado_hash = $2,
-      estado = 'texto_extraido',
-      ultimo_scrape = NOW()
-    WHERE id = $3
-  `, [textoCompleto, hashNuevo, normaId]);
+    // Registrar cambio en historial
+    if (hashAnterior) {
+      await client.query(
+        'INSERT INTO historial_cambios (norma_id, hash_anterior, hash_nuevo) VALUES ($1, $2, $3)',
+        [normaId, hashAnterior, hashNuevo]
+      );
+    }
 
-  // Reemplazar artículos
-  await pool.query('DELETE FROM articulos WHERE norma_id = $1', [normaId]);
-  for (const art of articulos) {
-    await pool.query(`
-      INSERT INTO articulos (norma_id, numero_articulo, orden, titulo, texto)
-      VALUES ($1, $2, $3, $4, $5)
-    `, [normaId, art.numero_articulo, art.orden, art.titulo || null, art.texto]);
-  }
+    // Actualizar texto en norma
+    await client.query(`
+      UPDATE normas SET
+        texto_completo = $1,
+        texto_actualizado_hash = $2,
+        estado = 'texto_extraido',
+        ultimo_scrape = NOW()
+      WHERE id = $3
+    `, [textoCompleto, hashNuevo, normaId]);
 
-  // Encolar embeddings para la norma
-  await pool.query(`
-    INSERT INTO cola_embeddings (entidad_tipo, entidad_id, campo_embedding, prioridad)
-    VALUES ('norma', $1, 'embedding_resumen', 3)
-    ON CONFLICT (entidad_tipo, entidad_id, campo_embedding) DO UPDATE SET
-      procesado_at = NULL, intentos = 0, creado_at = NOW()
-  `, [normaId]);
+    // Reemplazar artículos
+    await client.query('DELETE FROM articulos WHERE norma_id = $1', [normaId]);
+    for (const art of articulos) {
+      await client.query(`
+        INSERT INTO articulos (norma_id, numero_articulo, orden, titulo, texto)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [normaId, art.numero_articulo, art.orden, art.titulo || null, art.texto]);
+    }
 
-  // Encolar embeddings para cada artículo
-  const artRows = await pool.query('SELECT id FROM articulos WHERE norma_id = $1', [normaId]);
-  for (const art of artRows.rows) {
-    await pool.query(`
+    // Encolar embedding para la norma
+    await client.query(`
       INSERT INTO cola_embeddings (entidad_tipo, entidad_id, campo_embedding, prioridad)
-      VALUES ('articulo', $1, 'embedding', 5)
-      ON CONFLICT DO NOTHING
-    `, [art.id]);
+      VALUES ('norma', $1, 'embedding_resumen', 3)
+      ON CONFLICT (entidad_tipo, entidad_id, campo_embedding) DO UPDATE SET
+        procesado_at = NULL, intentos = 0, creado_at = NOW()
+    `, [normaId]);
+
+    // Encolar embeddings para artículos
+    const artRows = await client.query('SELECT id FROM articulos WHERE norma_id = $1', [normaId]);
+    for (const art of artRows.rows) {
+      await client.query(`
+        INSERT INTO cola_embeddings (entidad_tipo, entidad_id, campo_embedding, prioridad)
+        VALUES ('articulo', $1, 'embedding', 5)
+        ON CONFLICT DO NOTHING
+      `, [art.id]);
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
 
   return true; // Hubo cambio
@@ -155,8 +170,18 @@ async function upsertTextoActualizado(normaId, htmlText, articulos) {
 
 /**
  * Upsert de relaciones normativas.
+ * Elimina las relaciones anteriores antes de reinsertar para evitar duplicados,
+ * ya que relaciones_normativas no tiene un unique constraint compuesto.
  */
 async function upsertRelaciones(normaOrigenId, relaciones) {
+  if (!relaciones || relaciones.length === 0) return;
+
+  // Eliminar relaciones anteriores y reinsertar (evita duplicados sin necesitar unique constraint)
+  await pool.query(
+    'DELETE FROM relaciones_normativas WHERE norma_origen_id = $1',
+    [normaOrigenId]
+  );
+
   for (const rel of relaciones) {
     // Buscar si la norma destino ya existe
     const { rows } = await pool.query(
@@ -170,7 +195,6 @@ async function upsertRelaciones(normaOrigenId, relaciones) {
         (norma_origen_id, norma_destino_id, destino_tipo, destino_numero, destino_anio,
          tipo_relacion, detalle)
       VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT DO NOTHING
     `, [normaOrigenId, destinoId, rel.destino_tipo, rel.destino_numero, rel.destino_anio,
         rel.tipo_relacion, rel.detalle]);
   }
@@ -196,8 +220,12 @@ async function obtenerBatchEmbeddings(limite = 500) {
 
 /**
  * Guarda un embedding en la entidad correspondiente.
+ * El parámetro `campo` se interpola en SQL, por lo que se valida contra un allowlist.
  */
 async function guardarEmbedding(colaId, entidadTipo, entidadId, campo, vector) {
+  if (!ALLOWED_EMBEDDING_CAMPOS.has(campo)) {
+    throw new Error(`Campo de embedding no permitido: ${campo}`);
+  }
   const vectorStr = `[${vector.join(',')}]`;
 
   if (entidadTipo === 'norma') {
