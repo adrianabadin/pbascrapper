@@ -16,12 +16,18 @@ const maxPaginas = args.includes('--max-paginas')
   ? parseInt(args[args.indexOf('--max-paginas') + 1])
   : null;
 
+let erroresConsecutivos = 0;
+const MAX_ERRORES_CONSECUTIVOS = 10;
+
 async function procesarNorma(normaBasica) {
   try {
     // 1. Upsert básico (desde listing)
     const { id: normaId } = await upsertNormaBasica(normaBasica);
 
-    if (soloListing) return;
+    if (soloListing) {
+      erroresConsecutivos = 0;
+      return;
+    }
 
     // 2. Scrape página de detalle
     await delay(DELAY_MS);
@@ -50,48 +56,53 @@ async function procesarNorma(normaBasica) {
       await upsertRelaciones(normaId, detalle.relaciones);
     }
 
+    erroresConsecutivos = 0; // reset on success
   } catch (err) {
+    erroresConsecutivos++;
     console.error(`\n  ❌ Error en ${normaBasica.url_canonica}: ${err.message}`);
+    if (erroresConsecutivos >= MAX_ERRORES_CONSECUTIVOS) {
+      throw new Error(`Abortando: ${MAX_ERRORES_CONSECUTIVOS} errores consecutivos. Último error: ${err.message}`);
+    }
   }
 }
 
 async function scrapearTipo(tipo) {
   console.log(`\n🔍 Scrapeando ${tipo.toUpperCase()}...`);
 
-  // Primera página para conocer el total
   const { html: html1, totalResultados, totalPaginas } = await fetchListingPage(tipo, 1);
   const paginaMaxima = maxPaginas ? Math.min(maxPaginas, totalPaginas) : totalPaginas;
   console.log(`   Total: ${totalResultados} normas, ${paginaMaxima} páginas a procesar`);
 
-  // Procesar primera página
-  const normas1 = parseListingPage(html1);
-  for (const norma of normas1) {
-    if (desdeAnio) {
-      const { anio } = inferirIdentidad(norma.url_canonica);
-      if (anio < desdeAnio) continue;
+  let finalizarTipo = false;
+
+  // Helper to process a page's normas, returns true if should stop
+  async function procesarPagina(normas) {
+    for (const norma of normas) {
+      if (desdeAnio) {
+        const { anio } = inferirIdentidad(norma.url_canonica);
+        if (anio < desdeAnio) {
+          console.log(`\n   ⏹ Llegamos a ${anio} < ${desdeAnio}, deteniendo.`);
+          return true; // signal to stop
+        }
+      }
+      process.stdout.write(`  → ${norma.titulo}... `);
+      await procesarNorma(norma);
     }
-    process.stdout.write(`  → ${norma.titulo}... `);
-    await procesarNorma(norma);
-    await delay(DELAY_MS);
+    return false;
   }
 
-  // Procesar páginas restantes
-  for (let pagina = 2; pagina <= paginaMaxima; pagina++) {
+  // Process page 1
+  const normas1 = parseListingPage(html1);
+  finalizarTipo = await procesarPagina(normas1);
+
+  // Process remaining pages
+  for (let pagina = 2; pagina <= paginaMaxima && !finalizarTipo; pagina++) {
     console.log(`\n📄 Página ${pagina}/${paginaMaxima}...`);
     await delay(DELAY_MS);
 
     const { html } = await fetchListingPage(tipo, pagina);
     const normas = parseListingPage(html);
-
-    for (const norma of normas) {
-      if (desdeAnio) {
-        const { anio } = inferirIdentidad(norma.url_canonica);
-        if (anio < desdeAnio) continue;
-      }
-      process.stdout.write(`  → ${norma.titulo}... `);
-      await procesarNorma(norma);
-      await delay(DELAY_MS);
-    }
+    finalizarTipo = await procesarPagina(normas);
   }
 
   console.log(`\n✅ ${tipo.toUpperCase()} completado`);
@@ -112,4 +123,4 @@ async function main() {
   console.log('\n🎉 Scraping completado');
 }
 
-main().catch(e => { console.error('FATAL:', e.message); pool.end(); process.exit(1); });
+main().catch(async (e) => { console.error('FATAL:', e.message); await pool.end(); process.exit(1); });

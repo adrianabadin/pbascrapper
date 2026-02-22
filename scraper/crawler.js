@@ -32,6 +32,10 @@ async function fetchWithRetry(url, intentos = 3) {
       });
       return response.data;
     } catch (err) {
+      // Don't retry on permanent client errors
+      if (err.response && [403, 404, 410].includes(err.response.status)) {
+        throw err;
+      }
       if (i === intentos - 1) throw err;
       const wait = 1000 * Math.pow(2, i);
       console.warn(`  ⚠ Reintento ${i + 1}/${intentos} para ${url} (espera ${wait}ms)`);
