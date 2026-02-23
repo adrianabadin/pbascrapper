@@ -206,7 +206,15 @@ function parseNormaUrl(url) {
   // Pattern: /ar-b/{tipo}/{anio}/{numero}/{sitio_id}
   const match = url.match(/\/ar-b\/([\w-]+)\/(\d{4})\/(\d+)\/(\d+)/);
   if (!match) return null;
-  const tipoMap = { 'ley': 'ley', 'decreto': 'decreto', 'decreto-ley': 'decreto_ley' };
+  const tipoMap = {
+    'ley': 'ley',
+    'decreto': 'decreto',
+    'decreto-ley': 'decreto_ley',
+    'resolucion': 'resolucion',
+    'disposicion': 'disposicion',
+    'ordenanza-general': 'ordenanza_general',
+    'resolucion-conjunta': 'resolucion_conjunta',
+  };
   return {
     tipo: tipoMap[match[1]] || match[1],
     anio: parseInt(match[2]),

@@ -8,6 +8,8 @@ const DELAY_MS = parseInt(process.env.SCRAPER_DELAY_MS || '500');
 const TIPO_MAP = {
   'ley': 'Law',
   'decreto': 'Decree',
+  'decreto_ley': 'DecreeLaw',
+  'ordenanza_general': 'GeneralOrdinance',
 };
 
 /**

@@ -16,6 +16,8 @@ function inferirTipo(urlCanonica) {
   if (urlCanonica.includes('/decreto/')) return 'decreto';
   if (urlCanonica.includes('/resolucion/')) return 'resolucion';
   if (urlCanonica.includes('/disposicion/')) return 'disposicion';
+  if (urlCanonica.includes('/ordenanza-general/')) return 'ordenanza_general';
+  if (urlCanonica.includes('/resolucion-conjunta/')) return 'resolucion_conjunta';
   return 'ley';
 }
 
