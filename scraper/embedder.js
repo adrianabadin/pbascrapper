@@ -75,25 +75,36 @@ function extraerTexto(row) {
  * POST a /embeddings con retry en rate limit y error de red.
  */
 async function llamarAPIEmbeddings(textos, intento = 1) {
+  const totalChars = textos.reduce((s, t) => s + (t?.length || 0), 0);
+  if (intento === 1) {
+    process.stdout.write(`    [embed] ${textos.length} textos, ${totalChars} chars... `);
+  }
+
   try {
     const res = await axios.post(
       `${ZHIPU_BASE_URL}/embeddings`,
       { model: 'embedding-3', input: textos },
       { headers: { Authorization: `Bearer ${ZHIPU_API_KEY}` }, timeout: 60000 }
     );
+    process.stdout.write(`OK (${res.data.usage?.total_tokens || '?'} tokens)\n`);
     return res.data;
   } catch (err) {
-    const status = err.response?.status;
+    const status  = err.response?.status;
+    const body    = err.response?.data;
+    const apiMsg  = body?.error?.message || body?.message || err.message;
+    process.stdout.write(`\n`);
+    console.error(`    [embed] ❌ HTTP ${status || 'ERR'}: ${apiMsg}`);
+    if (body) console.error(`    [embed] body: ${JSON.stringify(body)}`);
 
     if (status === 429 && intento <= 3) {
       const wait = Math.min(1000 * Math.pow(2, intento) + Math.random() * 500, 30000);
-      console.log(`  ⚠️  Rate limit (429). Reintento ${intento}/3 en ${Math.round(wait / 1000)}s...`);
+      console.log(`    [embed] Rate limit. Reintento ${intento}/3 en ${Math.round(wait / 1000)}s...`);
       await delay(wait);
       return llamarAPIEmbeddings(textos, intento + 1);
     }
 
     if (!status && intento <= 2) {
-      console.log(`  ⚠️  Error de red. Reintento ${intento}/2...`);
+      console.log(`    [embed] Error de red. Reintento ${intento}/2...`);
       await delay(2000);
       return llamarAPIEmbeddings(textos, intento + 1);
     }
@@ -133,8 +144,9 @@ async function clasificarNorma(resumen) {
     return validas.length > 0 ? validas : [];
   } catch (err) {
     // La clasificación es no-crítica: loguear y continuar
-    const msg = err.response?.data?.error?.message || err.message;
-    console.log(`    ⚠️  Clasificación fallida: ${msg}`);
+    const status = err.response?.status;
+    const msg    = err.response?.data?.error?.message || err.response?.data?.message || err.message;
+    console.error(`    [classify] ⚠️  HTTP ${status || 'ERR'}: ${msg}`);
     return [];
   }
 }
@@ -153,17 +165,19 @@ async function marcarErrorSafe(colaId, mensaje) {
 /**
  * Procesa un sub-batch: genera embeddings y clasifica normas.
  */
-async function procesarSubBatch(items) {
+async function procesarSubBatch(items, subIdx) {
   const textos = items.map(extraerTexto);
+  console.log(`  [sub-batch ${subIdx}] ${items.length} items`);
 
   let apiData;
   try {
     apiData = await llamarAPIEmbeddings(textos);
   } catch (err) {
-    const msg = err.response?.data?.error?.message || err.message;
-    console.log(`  ❌ Error API embeddings: ${msg}`);
+    const status = err.response?.status;
+    const msg    = err.response?.data?.error?.message || err.response?.data?.message || err.message;
+    console.error(`  [sub-batch ${subIdx}] ❌ Fallo total HTTP ${status || 'ERR'}: ${msg}`);
     for (const item of items) {
-      await marcarErrorSafe(item.id, `API error: ${msg}`);
+      await marcarErrorSafe(item.id, `HTTP ${status || 'ERR'}: ${msg}`);
     }
     return { guardados: 0, errores: items.length, tokens: 0, clasificados: 0 };
   }
@@ -174,10 +188,11 @@ async function procesarSubBatch(items) {
   const tokens = apiData.usage?.total_tokens || 0;
 
   for (let i = 0; i < items.length; i++) {
-    const item = items[i];
+    const item   = items[i];
     const vector = apiData.data[i]?.embedding;
 
     if (!vector) {
+      console.error(`    ❌ Sin vector: ${item.entidad_tipo} ${item.entidad_id} (${item.campo_embedding})`);
       await marcarErrorSafe(item.id, 'No se recibió embedding para este item');
       errores++;
       continue;
@@ -196,6 +211,7 @@ async function procesarSubBatch(items) {
         }
       }
     } catch (err) {
+      console.error(`    ❌ DB error en ${item.entidad_tipo} ${item.entidad_id}: ${err.message}`);
       await marcarErrorSafe(item.id, `DB error: ${err.message}`);
       errores++;
     }
@@ -274,8 +290,8 @@ async function main() {
     let bClasificados = 0;
     const t0 = Date.now();
 
-    for (const sub of subBatches) {
-      const { guardados, errores, tokens, clasificados } = await procesarSubBatch(sub);
+    for (let si = 0; si < subBatches.length; si++) {
+      const { guardados, errores, tokens, clasificados } = await procesarSubBatch(subBatches[si], si + 1);
       bGuardados    += guardados;
       bErrores      += errores;
       bTokens       += tokens;
