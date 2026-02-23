@@ -256,7 +256,7 @@ async function main() {
     if (nArts   > 0) console.log(`  → Artículos (embedding):              ${nArts}`);
 
     // --- Dividir en sub-batches por límite estimado de tokens ---
-    const MAX_ITEMS_PER_REQ = Math.max(1, Math.floor(MAX_TOKENS_PER_REQ / 20));
+    const MAX_ITEMS_PER_REQ = Math.min(64, Math.max(1, Math.floor(MAX_TOKENS_PER_REQ / 20)));
     const subBatches = [];
     for (let i = 0; i < validos.length; i += MAX_ITEMS_PER_REQ) {
       subBatches.push(validos.slice(i, i + MAX_ITEMS_PER_REQ));
