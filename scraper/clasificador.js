@@ -28,9 +28,66 @@ const CATEGORIAS = [
   'derechos_sociales', 'presupuesto',
 ];
 
-const PROMPT_SISTEMA = `Sos un clasificador de normas legales de la Provincia de Buenos Aires.
-Dado el resumen de una norma, respondé ÚNICAMENTE con 1 a 3 categorías de esta lista, separadas por coma, sin texto adicional:
-${CATEGORIAS.join(', ')}`;
+// Sinónimos / variantes con acento que el modelo puede devolver → categoría canónica
+const ALIAS = {
+  'educacion':       'educacion',
+  'educación':       'educacion',
+  'administracion':  'administrativo',
+  'administración':  'administrativo',
+  'medio ambiente':  'medio_ambiente',
+  'medioambiente':   'medio_ambiente',
+  'obras publicas':  'obras_publicas',
+  'derechos sociales': 'derechos_sociales',
+  'seguridad publica': 'seguridad',
+  'seguridad pública': 'seguridad',
+  'tributacion':     'tributos',
+  'tributación':     'tributos',
+  'impuestos':       'tributos',
+  'presupuesto':     'presupuesto',
+  'vivienda':        'vivienda',
+  'transporte':      'transporte',
+  'agropecuario':    'agropecuario',
+  'municipal':       'municipal',
+  'civil':           'civil',
+  'empleo':          'empleo',
+  'salud':           'salud',
+  'urbanismo':       'urbanismo',
+};
+
+// Quita acentos: educación → educacion
+function sinAcentos(str) {
+  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+function parsearCategorias(respuesta) {
+  // Intentar split por coma o punto y coma o newline
+  const partes = respuesta.split(/[,;\n]+/);
+  const resultado = new Set();
+  for (const parte of partes) {
+    const limpio = sinAcentos(parte.trim().toLowerCase()).replace(/\s+/g, '_');
+    const limpio_espacios = sinAcentos(parte.trim().toLowerCase()); // sin reemplazar espacios aún
+    // 1. match directo
+    if (CATEGORIAS.includes(limpio)) { resultado.add(limpio); continue; }
+    // 2. via alias (con espacios, sin acentos)
+    const alias = ALIAS[limpio_espacios] || ALIAS[limpio];
+    if (alias) { resultado.add(alias); continue; }
+    // 3. sin acentos + sin reemplazar espacios por _
+    const sinAc = sinAcentos(limpio_espacios).replace(/\s+/g, '_');
+    if (CATEGORIAS.includes(sinAc)) { resultado.add(sinAc); }
+  }
+  return [...resultado];
+}
+
+const PROMPT_SISTEMA = `Clasificá la siguiente norma legal de la Provincia de Buenos Aires.
+
+Respondé SOLO con los nombres de categoría separados por coma. Sin explicaciones, sin puntos, sin numeración.
+
+Categorías (usá exactamente estos nombres):
+administrativo, agropecuario, civil, derechos_sociales, educacion, empleo, medio_ambiente, municipal, obras_publicas, presupuesto, salud, seguridad, transporte, tributos, urbanismo, vivienda
+
+Elegí entre 1 y 3 categorías. Solo los nombres, nada más.
+Ejemplo correcto: salud, empleo
+Ejemplo incorrecto: La norma pertenece a la categoría salud`;
 
 let shutdown = false;
 process.on('SIGINT',  () => { console.log('\n⏹  SIGINT — terminando...'); shutdown = true; });
@@ -61,8 +118,11 @@ async function clasificar(resumen, intento = 1) {
     );
 
     const respuesta = res.data.choices[0]?.message?.content?.trim() || '';
-    const candidatas = respuesta.split(',').map(c => c.trim().toLowerCase().replace(/\s+/g, '_'));
-    return candidatas.filter(c => CATEGORIAS.includes(c));
+    const cats = parsearCategorias(respuesta);
+    if (cats.length === 0) {
+      process.stdout.write(` [raw:"${respuesta.slice(0, 80)}"]`);
+    }
+    return cats;
   } catch (err) {
     const status = err.response?.status;
     const msg    = err.response?.data?.error?.message || err.response?.data?.message || err.message;
