@@ -10,7 +10,8 @@
  *   EMBED_BATCH_SIZE     — items por ciclo (default 50)
  *   EMBED_DELAY_MS       — delay entre batches en ms (default 200)
  *   EMBED_POLL_INTERVAL  — ms a esperar con cola vacía (default 30000)
- *   MAX_TOKENS_PER_REQ   — límite estimado de tokens por request de embeddings (default 10000)
+ *   MAX_ITEMS_API        — máx. items por request a Zhipu embeddings (default 16, hard limit 64)
+ *   MAX_TEXTO_CHARS      — máx. caracteres por texto antes de truncar (default 3000 ≈ 750 tokens)
  *   CLASIFICAR           — '0' para deshabilitar clasificación (default habilitada)
  */
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
@@ -24,6 +25,8 @@ const DELAY_MS           = parseInt(process.env.EMBED_DELAY_MS      || '200');
 const POLL_INTERVAL      = parseInt(process.env.EMBED_POLL_INTERVAL || '30000');
 const MAX_TOKENS_PER_REQ = parseInt(process.env.MAX_TOKENS_PER_REQ  || '10000');
 const CLASIFICAR         = process.env.CLASIFICAR !== '0';
+const MAX_TEXTO_CHARS    = parseInt(process.env.MAX_TEXTO_CHARS || '3000'); // ~750 tokens
+const MAX_ITEMS_API      = parseInt(process.env.MAX_ITEMS_API   || '16');   // hard cap por request
 const MAX_FALLOS         = 5;
 
 // Taxonomía de categorías para legislación bonaerense
@@ -57,12 +60,15 @@ function delay(ms) {
 }
 
 /**
- * Extrae el texto a embeddear según el tipo de entidad.
+ * Extrae y trunca el texto a embeddear según el tipo de entidad.
+ * Zhipu limita el tamaño total del request — truncamos a MAX_TEXTO_CHARS.
  */
 function extraerTexto(row) {
-  if (row.entidad_tipo === 'norma')    return row.resumen;
-  if (row.entidad_tipo === 'articulo') return row.articulo_texto;
-  return null;
+  let texto = null;
+  if (row.entidad_tipo === 'norma')    texto = row.resumen;
+  if (row.entidad_tipo === 'articulo') texto = row.articulo_texto;
+  if (texto && texto.length > MAX_TEXTO_CHARS) texto = texto.slice(0, MAX_TEXTO_CHARS);
+  return texto;
 }
 
 /**
@@ -255,11 +261,10 @@ async function main() {
     if (nNormas > 0) console.log(`  → Normas (embedding + clasificación): ${nNormas}`);
     if (nArts   > 0) console.log(`  → Artículos (embedding):              ${nArts}`);
 
-    // --- Dividir en sub-batches por límite estimado de tokens ---
-    const MAX_ITEMS_PER_REQ = Math.min(64, Math.max(1, Math.floor(MAX_TOKENS_PER_REQ / 20)));
+    // --- Dividir en sub-batches respetando el hard cap de la API (MAX_ITEMS_API) ---
     const subBatches = [];
-    for (let i = 0; i < validos.length; i += MAX_ITEMS_PER_REQ) {
-      subBatches.push(validos.slice(i, i + MAX_ITEMS_PER_REQ));
+    for (let i = 0; i < validos.length; i += MAX_ITEMS_API) {
+      subBatches.push(validos.slice(i, i + MAX_ITEMS_API));
     }
 
     // --- Procesar todos los sub-batches (shutdown se chequea al volver al tope) ---
