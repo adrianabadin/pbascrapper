@@ -26,7 +26,7 @@ function inferirTipo(urlCanonica) {
  * /ar-b/ley/2026/15610/559753 → { numero: 15610, anio: 2026, sitio_id: 559753 }
  */
 function inferirIdentidad(urlCanonica) {
-  const match = urlCanonica.match(/\/ar-b\/[\w-]+\/(\d{4})\/(\d+)\/(\d+)/);
+  const match = urlCanonica.match(/\/ar-b\/[\w-]+\/(\d{4})\/([\w]+)\/(\d+)/);
   if (!match) throw new Error(`URL inválida: ${urlCanonica}`);
   return {
     anio: parseInt(match[1]),
