@@ -2,7 +2,7 @@
  * Limpia todas las tablas del proyecto (TRUNCATE CASCADE).
  * Uso: node db/reset-tables.js
  */
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const { Pool } = require('pg');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });

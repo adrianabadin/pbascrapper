@@ -26,7 +26,12 @@
       "Bash(/c/Users/Adria/AppData/Local/Temp/write_apply.py:*)",
       "mcp__context7__resolve-library-id",
       "mcp__context7__query-docs",
-      "Bash(cd /c/Users/Adria/Documents/code/pba && npx jest tests/scraper/parser.test.js --no-coverage 2>&1)"
+      "Bash(cd /c/Users/Adria/Documents/code/pba && npx jest tests/scraper/parser.test.js --no-coverage 2>&1)",
+      "WebFetch(domain:normas.gba.gob.ar)",
+      "mcp__ordenanzas-saladillo__search_ordenanzas",
+      "mcp__ordenanzas-saladillo__list_categories",
+      "mcp__ordenanzas-saladillo__get_ordenanza",
+      "Bash(cd:*)"
     ]
   }
 }
