@@ -124,7 +124,7 @@ async function clasificarNorma(resumen) {
     const res = await axios.post(
       `${ZHIPU_BASE_URL}/chat/completions`,
       {
-        model: 'glm-4-flash',
+        model: 'glm-4.7-flash',
         messages: [
           { role: 'system', content: PROMPT_SISTEMA },
           { role: 'user',   content: resumen.slice(0, 1000) }, // límite de contexto
@@ -229,7 +229,7 @@ async function main() {
 
   console.log('=== EMBEDDER NORMAS GBA ===');
   console.log(`Config: batch=${BATCH_SIZE}, delay=${DELAY_MS}ms, poll=${POLL_INTERVAL / 1000}s`);
-  console.log(`Clasificación temática: ${CLASIFICAR ? 'habilitada (glm-4-flash)' : 'deshabilitada'}\n`);
+  console.log(`Clasificación temática: ${CLASIFICAR ? 'habilitada (glm-4.7-flash)' : 'deshabilitada'}\n`);
 
   let fallosConsecutivos = 0;
 
