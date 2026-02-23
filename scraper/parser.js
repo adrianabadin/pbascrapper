@@ -131,8 +131,11 @@ function parseTextoActualizado(html) {
   let articuloActual = null;
   let orden = 0;
 
-  // Regex para detectar inicio de artículo
-  const ARTICULO_REGEX = /^(ART[IÍ]CULO|ARTICULO)\s+\d+[°º]?\s*(BIS|TER|QUATER)?\s*[.°-]/i;
+  // Regex para detectar inicio de artículo.
+  // El separador final (.-  :  °  etc.) puede estar DENTRO o FUERA del <strong>,
+  // por eso es opcional — evitamos asumir dónde termina el tag.
+  // Se añade ':' porque algunas leyes usan "ARTÍCULO 1º :" como formato.
+  const ARTICULO_REGEX = /^(ART[IÍ]CULO|ARTICULO)\s+\d+[°º]?\s*(BIS|TER|QUATER)?(\s*[.°\-:])?/i;
 
   // Get all p and div elements, but exclude divs that contain other p/div elements
   // (i.e., only process "leaf" elements) to avoid double-processing when p is inside div
@@ -146,14 +149,14 @@ function parseTextoActualizado(html) {
     const strong = el.querySelector('strong');
     if (strong) {
       const strongText = strong.textContent.trim();
-      if (ARTICULO_REGEX.test(strongText)) {
+      if (ARTICULO_REGEX.test(strongText) && !el.textContent.trim().match(/^["'"'«]/)) {
         // Guardar el artículo anterior
         if (articuloActual) {
           articulos.push(articuloActual);
         }
         // Iniciar nuevo artículo
         articuloActual = {
-          numero_articulo: strongText.replace(/[\s°º.\-]+$/, '').trim(),
+          numero_articulo: strongText.replace(/[\s°º.\-:]+$/, '').trim(),
           texto: el.textContent.trim(),
           orden: orden++,
         };
