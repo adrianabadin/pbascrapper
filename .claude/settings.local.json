@@ -31,7 +31,18 @@
       "mcp__ordenanzas-saladillo__search_ordenanzas",
       "mcp__ordenanzas-saladillo__list_categories",
       "mcp__ordenanzas-saladillo__get_ordenanza",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(python:*)",
+      "Bash(tail:*)",
+      "Bash(head:*)",
+      "mcp__postgres-normas__execute_sql",
+      "mcp__playwright__browser_fill_form",
+      "mcp__playwright__browser_evaluate"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "postgres-normas"
+  ]
 }
