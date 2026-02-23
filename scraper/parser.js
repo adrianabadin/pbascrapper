@@ -47,6 +47,7 @@ function parseDetallePage(html, urlCanonica) { // urlCanonica reserved for futur
     tipo_publicacion: null,
     resumen: null,
     observaciones: null,
+    organismo: null,
     ultima_actualizacion: null,
     relaciones: [],
   };
@@ -64,6 +65,8 @@ function parseDetallePage(html, urlCanonica) { // urlCanonica reserved for futur
       data.tipo_publicacion = text.replace('Tipo de publicación:', '').trim();
     else if (text.startsWith('Última actualizacion:'))
       data.ultima_actualizacion = extractDateTime(text);
+    else if (/^(del|de la|de el)\s/i.test(text) && !data.organismo)
+      data.organismo = text;
   });
 
   // Resumen: primer párrafo después de h5 "Resumen"

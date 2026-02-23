@@ -44,10 +44,11 @@ async function upsertNormaBasica(data) {
   const { anio, numero, sitio_id } = inferirIdentidad(data.url_canonica);
 
   const sql = `
-    INSERT INTO normas (tipo, numero, anio, sitio_id, url_canonica, resumen,
+    INSERT INTO normas (tipo, numero, anio, sitio_id, url_canonica, titulo, resumen,
                         fecha_publicacion, ultima_actualizacion)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     ON CONFLICT (sitio_id) DO UPDATE SET
+      titulo = EXCLUDED.titulo,
       resumen = EXCLUDED.resumen,
       ultima_actualizacion = EXCLUDED.ultima_actualizacion,
       updated_at = NOW()
@@ -55,7 +56,7 @@ async function upsertNormaBasica(data) {
   `;
   const result = await pool.query(sql, [
     tipo, numero, anio, sitio_id,
-    data.url_canonica, data.resumen,
+    data.url_canonica, data.titulo || null, data.resumen,
     parseFecha(data.fecha_publicacion),
     parseFechaHora(data.ultima_actualizacion),
   ]);
@@ -75,9 +76,10 @@ async function upsertNormaDetalle(sitio_id, detalle) {
       boletin_oficial_nro   = $5,
       tipo_publicacion      = $6,
       observaciones         = $7,
+      organismo             = $8,
       estado                = 'scrapeado',
       ultimo_scrape         = NOW()
-    WHERE sitio_id = $8
+    WHERE sitio_id = $9
     RETURNING id
   `;
   const result = await pool.query(sql, [
@@ -88,6 +90,7 @@ async function upsertNormaDetalle(sitio_id, detalle) {
     detalle.boletin_oficial_nro,
     detalle.tipo_publicacion,
     detalle.observaciones,
+    detalle.organismo || null,
     sitio_id,
   ]);
   return result.rows[0]?.id;

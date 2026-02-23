@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS normas (
   anio                    SMALLINT NOT NULL,
   sitio_id                INTEGER NOT NULL,
   url_canonica            TEXT NOT NULL,
+  titulo                  TEXT,
+  organismo               TEXT,
   url_texto_original      TEXT,
   url_texto_actualizado   TEXT,
   url_fundamentos         TEXT,
@@ -168,7 +170,10 @@ BEGIN
       COALESCE(NEW.numero::text, '') || ' ' ||
       COALESCE(NEW.anio::text, '')
     ), 'A') ||
-    setweight(to_tsvector('spanish', COALESCE(NEW.resumen, '')), 'B') ||
+    setweight(to_tsvector('spanish',
+      COALESCE(NEW.resumen, '') || ' ' ||
+      COALESCE(NEW.organismo, '')
+    ), 'B') ||
     setweight(to_tsvector('spanish', COALESCE(NEW.observaciones, '')), 'C') ||
     setweight(to_tsvector('spanish', COALESCE(NEW.texto_completo, '')), 'D');
   RETURN NEW;
