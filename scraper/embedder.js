@@ -119,7 +119,7 @@ async function llamarAPIEmbeddings(textos, intento = 1) {
  * Clasifica una norma en categorías usando glm-4-flash.
  * Retorna array de strings o [] si falla.
  */
-async function clasificarNorma(resumen) {
+async function clasificarNorma(resumen, intento = 1) {
   if (!resumen || !resumen.trim()) return [];
 
   try {
@@ -129,7 +129,7 @@ async function clasificarNorma(resumen) {
         model: 'glm-4.7-flash',
         messages: [
           { role: 'system', content: PROMPT_SISTEMA },
-          { role: 'user',   content: resumen.slice(0, 1000) }, // límite de contexto
+          { role: 'user',   content: resumen.slice(0, 1000) },
         ],
         temperature: 0,
         max_tokens: 50,
@@ -138,17 +138,25 @@ async function clasificarNorma(resumen) {
     );
 
     const respuesta = res.data.choices[0]?.message?.content?.trim() || '';
-
-    // Parsear y validar que las categorías sean del vocabulario controlado
     const candidatas = respuesta.split(',').map(c => c.trim().toLowerCase().replace(/\s+/g, '_'));
     const validas = candidatas.filter(c => CATEGORIAS.includes(c));
-
     return validas.length > 0 ? validas : [];
   } catch (err) {
-    // La clasificación es no-crítica: loguear y continuar
     const status = err.response?.status;
     const msg    = err.response?.data?.error?.message || err.response?.data?.message || err.message;
-    console.error(`    [classify] ⚠️  HTTP ${status || 'ERR'}: ${msg}`);
+
+    // Rate limit: reintentar con backoff (máx 3 intentos)
+    if (status === 429 && intento <= 3) {
+      const wait = Math.min(5000 * intento, 20000);
+      console.log(`    [classify] Rate limit. Reintento ${intento}/3 en ${wait / 1000}s...`);
+      await delay(wait);
+      return clasificarNorma(resumen, intento + 1);
+    }
+
+    // No-crítico: loguear solo en primer fallo
+    if (intento === 1) {
+      console.error(`    [classify] ⚠️  HTTP ${status || 'ERR'}: ${msg}`);
+    }
     return [];
   }
 }
