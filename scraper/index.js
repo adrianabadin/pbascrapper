@@ -107,21 +107,31 @@ async function procesarNorma(normaBasica) {
 // Scraping mes a mes
 // ---------------------------------------------------------------------------
 
-async function scrapearMes(tipo, anio, mes) {
-  const fechaDesde = fmt(1, mes, anio);
-  const fechaHasta = fmt(ultimoDia(anio, mes), mes, anio);
-  const label = `${anio}-${String(mes).padStart(2, '0')}`;
+/**
+ * Semanas fijas del mes: 4 rangos de días que cubren el mes completo.
+ * Si el mes supera 200 normas, scrapearMes delega en estas semanas.
+ */
+function semanasDelMes(anio, mes) {
+  const ultimo = ultimoDia(anio, mes);
+  return [
+    { desde: fmt(1,  mes, anio), hasta: fmt(7,           mes, anio) },
+    { desde: fmt(8,  mes, anio), hasta: fmt(14,          mes, anio) },
+    { desde: fmt(15, mes, anio), hasta: fmt(21,          mes, anio) },
+    { desde: fmt(22, mes, anio), hasta: fmt(ultimo,      mes, anio) },
+  ];
+}
 
+async function scrapearRango(tipo, fechaDesde, fechaHasta, label) {
   const { html: html1, totalResultados, totalPaginas } =
     await fetchListingPage(tipo, 1, { fechaDesde, fechaHasta });
 
-  if (totalResultados === 0) return; // mes vacío, skip silencioso
+  if (totalResultados === 0) return 0;
 
   const paginaMaxima = Math.min(maxPaginas || 20, 20, totalPaginas);
 
   process.stdout.write(`  📅 ${label}: ${totalResultados} normas`);
   if (totalResultados > 200) {
-    process.stdout.write(` ⚠ > 200 (solo recuperables ${paginaMaxima * 10})`);
+    process.stdout.write(` ⚠ > 200 (recuperables: ${paginaMaxima * 10})`);
   }
   console.log(` — ${paginaMaxima} pág${paginaMaxima > 1 ? 's' : ''}`);
 
@@ -133,14 +143,37 @@ async function scrapearMes(tipo, anio, mes) {
     }
   }
 
-  // Página 1 (HTML ya disponible)
   await procesarPagina(parseListingPage(html1));
-
-  // Páginas 2..N
   for (let pagina = 2; pagina <= paginaMaxima; pagina++) {
     await delay(DELAY_MS);
     const { html } = await fetchListingPage(tipo, pagina, { fechaDesde, fechaHasta });
     await procesarPagina(parseListingPage(html));
+  }
+
+  return totalResultados;
+}
+
+async function scrapearMes(tipo, anio, mes) {
+  const fechaDesde = fmt(1, mes, anio);
+  const fechaHasta = fmt(ultimoDia(anio, mes), mes, anio);
+  const label = `${anio}-${String(mes).padStart(2, '0')}`;
+
+  // Verificar total sin traer resultados (solo página 1)
+  const { totalResultados } = await fetchListingPage(tipo, 1, { fechaDesde, fechaHasta });
+  if (totalResultados === 0) return;
+
+  if (totalResultados <= 200) {
+    // Mes normal: scrape directo
+    await scrapearRango(tipo, fechaDesde, fechaHasta, label);
+  } else {
+    // Fallback semanal: dividir el mes en 4 semanas
+    console.log(`  📅 ${label}: ${totalResultados} normas → fallback semanal`);
+    const semanas = semanasDelMes(anio, mes);
+    for (let i = 0; i < semanas.length; i++) {
+      const { desde, hasta } = semanas[i];
+      await delay(DELAY_MS);
+      await scrapearRango(tipo, desde, hasta, `  ${label} sem${i + 1} (${desde}→${hasta})`);
+    }
   }
 }
 
