@@ -6,10 +6,13 @@ const DELAY_MS = parseInt(process.env.SCRAPER_DELAY_MS || '500');
 
 // Mapa de tipos a query params del sitio
 const TIPO_MAP = {
-  'ley': 'Law',
-  'decreto': 'Decree',
-  'decreto_ley': 'DecreeLaw',
-  'ordenanza_general': 'GeneralOrdinance',
+  'ley':              'Law',
+  'decreto':          'Decree',
+  'decreto_ley':      'DecreeLaw',
+  'ordenanza_general':'GeneralOrdinance',
+  'resolucion':       'Resolution',
+  'disposicion':      'Disposition',
+  'resolucion_conjunta': 'JointResolution',
 };
 
 /**
