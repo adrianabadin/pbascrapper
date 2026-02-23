@@ -96,11 +96,19 @@ async function llamarAPIEmbeddings(textos, intento = 1) {
     console.error(`    [embed] ❌ HTTP ${status || 'ERR'}: ${apiMsg}`);
     if (body) console.error(`    [embed] body: ${JSON.stringify(body)}`);
 
-    if (status === 429 && intento <= 3) {
-      const wait = Math.min(1000 * Math.pow(2, intento) + Math.random() * 500, 30000);
-      console.log(`    [embed] Rate limit. Reintento ${intento}/3 en ${Math.round(wait / 1000)}s...`);
-      await delay(wait);
-      return llamarAPIEmbeddings(textos, intento + 1);
+    if (status === 429) {
+      // Código 1113 = saldo insuficiente — no tiene sentido reintentar
+      const code = body?.error?.code;
+      if (code === '1113' || (apiMsg && apiMsg.includes('余额不足'))) {
+        console.error(`    [embed] ❌ FATAL: saldo insuficiente en Zhipu. Recargá créditos y reiniciá.`);
+        throw err;
+      }
+      if (intento <= 3) {
+        const wait = Math.min(1000 * Math.pow(2, intento) + Math.random() * 500, 30000);
+        console.log(`    [embed] Rate limit. Reintento ${intento}/3 en ${Math.round(wait / 1000)}s...`);
+        await delay(wait);
+        return llamarAPIEmbeddings(textos, intento + 1);
+      }
     }
 
     if (!status && intento <= 2) {
