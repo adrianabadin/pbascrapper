@@ -261,6 +261,16 @@ async function guardarEmbedding(colaId, entidadTipo, entidadId, campo, vector) {
 }
 
 /**
+ * Guarda las categorías temáticas de una norma.
+ */
+async function guardarCategorias(normaId, categorias) {
+  await pool.query(
+    'UPDATE normas SET area_tematica = $1 WHERE id = $2',
+    [categorias, normaId]
+  );
+}
+
+/**
  * Marca un item de la cola con error.
  */
 async function marcarError(colaId, error) {
@@ -288,6 +298,6 @@ function parseFechaHora(str) {
 module.exports = {
   pool,
   upsertNormaBasica, upsertNormaDetalle, upsertTextoActualizado,
-  upsertRelaciones, obtenerBatchEmbeddings, guardarEmbedding, marcarError,
+  upsertRelaciones, obtenerBatchEmbeddings, guardarEmbedding, guardarCategorias, marcarError,
   inferirTipo, inferirIdentidad,
 };
