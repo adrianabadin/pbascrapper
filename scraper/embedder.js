@@ -1,32 +1,33 @@
 /**
- * Embedder — consume la cola_embeddings, genera vectores con Zhipu embedding-3
- * y clasifica cada norma en categorías temáticas con glm-4-flash.
+ * Embedder — consume la cola_embeddings, genera vectores con OpenAI text-embedding-3-large
+ * y clasifica cada norma en categorías temáticas con Zhipu glm-4.7-flash.
  *
  * Uso: node scraper/embedder.js
  *
  * Variables de entorno:
- *   ZHIPU_API_KEY        — requerida
+ *   OPENAI_API_KEY       — requerida (para embeddings)
+ *   ZHIPU_API_KEY        — requerida (para clasificación glm-4.7-flash)
  *   ZHIPU_BASE_URL       — default https://open.bigmodel.cn/api/paas/v4
  *   EMBED_BATCH_SIZE     — items por ciclo (default 50)
  *   EMBED_DELAY_MS       — delay entre batches en ms (default 200)
  *   EMBED_POLL_INTERVAL  — ms a esperar con cola vacía (default 30000)
- *   MAX_ITEMS_API        — máx. items por request a Zhipu embeddings (default 16, hard limit 64)
- *   MAX_TEXTO_CHARS      — máx. caracteres por texto antes de truncar (default 3000 ≈ 750 tokens)
+ *   MAX_ITEMS_API        — máx. items por request (default 100)
+ *   MAX_TEXTO_CHARS      — máx. caracteres por texto antes de truncar (default 6000)
  *   CLASIFICAR           — '0' para deshabilitar clasificación (default habilitada)
  */
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const axios = require('axios');
 const { pool, obtenerBatchEmbeddings, guardarEmbedding, guardarCategorias, marcarError } = require('./db');
 
+const OPENAI_API_KEY     = process.env.OPENAI_API_KEY;
 const ZHIPU_API_KEY      = process.env.ZHIPU_API_KEY;
 const ZHIPU_BASE_URL     = process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4';
 const BATCH_SIZE         = parseInt(process.env.EMBED_BATCH_SIZE    || '50');
 const DELAY_MS           = parseInt(process.env.EMBED_DELAY_MS      || '200');
 const POLL_INTERVAL      = parseInt(process.env.EMBED_POLL_INTERVAL || '30000');
-const MAX_TOKENS_PER_REQ = parseInt(process.env.MAX_TOKENS_PER_REQ  || '10000');
 const CLASIFICAR         = process.env.CLASIFICAR !== '0';
-const MAX_TEXTO_CHARS    = parseInt(process.env.MAX_TEXTO_CHARS || '3000'); // ~750 tokens
-const MAX_ITEMS_API      = parseInt(process.env.MAX_ITEMS_API   || '16');   // hard cap por request
+const MAX_TEXTO_CHARS    = parseInt(process.env.MAX_TEXTO_CHARS || '6000');
+const MAX_ITEMS_API      = parseInt(process.env.MAX_ITEMS_API   || '100');
 const MAX_FALLOS         = 5;
 
 // Taxonomía de categorías para legislación bonaerense
@@ -72,7 +73,8 @@ function extraerTexto(row) {
 }
 
 /**
- * POST a /embeddings con retry en rate limit y error de red.
+ * POST a OpenAI /embeddings con retry en rate limit y error de red.
+ * Usa text-embedding-3-large con dimensions=2048 para mantener el schema existente.
  */
 async function llamarAPIEmbeddings(textos, intento = 1) {
   const totalChars = textos.reduce((s, t) => s + (t?.length || 0), 0);
@@ -82,33 +84,25 @@ async function llamarAPIEmbeddings(textos, intento = 1) {
 
   try {
     const res = await axios.post(
-      `${ZHIPU_BASE_URL}/embeddings`,
-      { model: 'embedding-3', input: textos },
-      { headers: { Authorization: `Bearer ${ZHIPU_API_KEY}` }, timeout: 60000 }
+      'https://api.openai.com/v1/embeddings',
+      { model: 'text-embedding-3-large', input: textos, dimensions: 2048 },
+      { headers: { Authorization: `Bearer ${OPENAI_API_KEY}` }, timeout: 60000 }
     );
     process.stdout.write(`OK (${res.data.usage?.total_tokens || '?'} tokens)\n`);
     return res.data;
   } catch (err) {
-    const status  = err.response?.status;
-    const body    = err.response?.data;
-    const apiMsg  = body?.error?.message || body?.message || err.message;
+    const status = err.response?.status;
+    const body   = err.response?.data;
+    const apiMsg = body?.error?.message || body?.message || err.message;
     process.stdout.write(`\n`);
     console.error(`    [embed] ❌ HTTP ${status || 'ERR'}: ${apiMsg}`);
     if (body) console.error(`    [embed] body: ${JSON.stringify(body)}`);
 
-    if (status === 429) {
-      // Código 1113 = saldo insuficiente — no tiene sentido reintentar
-      const code = body?.error?.code;
-      if (code === '1113' || (apiMsg && apiMsg.includes('余额不足'))) {
-        console.error(`    [embed] ❌ FATAL: saldo insuficiente en Zhipu. Recargá créditos y reiniciá.`);
-        throw err;
-      }
-      if (intento <= 3) {
-        const wait = Math.min(1000 * Math.pow(2, intento) + Math.random() * 500, 30000);
-        console.log(`    [embed] Rate limit. Reintento ${intento}/3 en ${Math.round(wait / 1000)}s...`);
-        await delay(wait);
-        return llamarAPIEmbeddings(textos, intento + 1);
-      }
+    if (status === 429 && intento <= 3) {
+      const wait = Math.min(1000 * Math.pow(2, intento) + Math.random() * 500, 30000);
+      console.log(`    [embed] Rate limit. Reintento ${intento}/3 en ${Math.round(wait / 1000)}s...`);
+      await delay(wait);
+      return llamarAPIEmbeddings(textos, intento + 1);
     }
 
     if (!status && intento <= 2) {
@@ -229,13 +223,19 @@ async function procesarSubBatch(items, subIdx) {
 }
 
 async function main() {
-  if (!ZHIPU_API_KEY) {
-    console.error('❌ ZHIPU_API_KEY no configurada en .env');
+  if (!OPENAI_API_KEY) {
+    console.error('❌ OPENAI_API_KEY no configurada en .env');
+    await pool.end();
+    process.exit(1);
+  }
+  if (CLASIFICAR && !ZHIPU_API_KEY) {
+    console.error('❌ ZHIPU_API_KEY no configurada en .env (requerida para clasificación)');
     await pool.end();
     process.exit(1);
   }
 
   console.log('=== EMBEDDER NORMAS GBA ===');
+  console.log(`Embeddings: OpenAI text-embedding-3-large (dimensions=2048)`);
   console.log(`Config: batch=${BATCH_SIZE}, delay=${DELAY_MS}ms, poll=${POLL_INTERVAL / 1000}s`);
   console.log(`Clasificación temática: ${CLASIFICAR ? 'habilitada (glm-4.7-flash)' : 'deshabilitada'}\n`);
 
