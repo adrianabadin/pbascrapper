@@ -1,0 +1,247 @@
+/**
+ * Embedder — consume la cola_embeddings y genera vectores con Zhipu embedding-3.
+ * Uso: node scraper/embedder.js
+ *
+ * Variables de entorno:
+ *   ZHIPU_API_KEY        — requerida
+ *   ZHIPU_BASE_URL       — default https://open.bigmodel.cn/api/paas/v4
+ *   EMBED_BATCH_SIZE     — items por ciclo (default 50)
+ *   EMBED_DELAY_MS       — delay entre batches en ms (default 200)
+ *   EMBED_POLL_INTERVAL  — ms a esperar con cola vacía (default 30000)
+ *   MAX_TOKENS_PER_REQ   — límite estimado de tokens por request (default 10000)
+ */
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
+const axios = require('axios');
+const { pool, obtenerBatchEmbeddings, guardarEmbedding, marcarError } = require('./db');
+
+const ZHIPU_API_KEY      = process.env.ZHIPU_API_KEY;
+const ZHIPU_BASE_URL     = process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4';
+const BATCH_SIZE         = parseInt(process.env.EMBED_BATCH_SIZE    || '50');
+const DELAY_MS           = parseInt(process.env.EMBED_DELAY_MS      || '200');
+const POLL_INTERVAL      = parseInt(process.env.EMBED_POLL_INTERVAL || '30000');
+const MAX_TOKENS_PER_REQ = parseInt(process.env.MAX_TOKENS_PER_REQ  || '10000');
+const MAX_FALLOS         = 5;
+
+let shutdown = false;
+let batchCount = 0;
+let totalProcesados = 0;
+let totalTokens = 0;
+
+// SIGINT/SIGTERM: terminar después del batch actual completo (no en medio)
+process.on('SIGINT',  () => { console.log('\n⏹  SIGINT — terminando batch actual...'); shutdown = true; });
+process.on('SIGTERM', () => { console.log('\n⏹  SIGTERM — terminando batch actual...'); shutdown = true; });
+
+function ts() {
+  return new Date().toTimeString().slice(0, 8);
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Extrae el texto a embeddear según el tipo de entidad.
+ */
+function extraerTexto(row) {
+  if (row.entidad_tipo === 'norma')    return row.resumen;
+  if (row.entidad_tipo === 'articulo') return row.articulo_texto;
+  return null;
+}
+
+/**
+ * POST a /embeddings con retry en rate limit y error de red.
+ * 429: hasta 3 reintentos con backoff exponencial.
+ * Error de red: hasta 2 reintentos.
+ */
+async function llamarAPI(textos, intento = 1) {
+  try {
+    const res = await axios.post(
+      `${ZHIPU_BASE_URL}/embeddings`,
+      { model: 'embedding-3', input: textos },
+      { headers: { Authorization: `Bearer ${ZHIPU_API_KEY}` }, timeout: 60000 }
+    );
+    return res.data;
+  } catch (err) {
+    const status = err.response?.status;
+
+    if (status === 429 && intento <= 3) {
+      const wait = Math.min(1000 * Math.pow(2, intento) + Math.random() * 500, 30000);
+      console.log(`  ⚠️  Rate limit (429). Reintento ${intento}/3 en ${Math.round(wait / 1000)}s...`);
+      await delay(wait);
+      return llamarAPI(textos, intento + 1);
+    }
+
+    if (!status && intento <= 2) {
+      console.log(`  ⚠️  Error de red. Reintento ${intento}/2...`);
+      await delay(2000);
+      return llamarAPI(textos, intento + 1);
+    }
+
+    throw err;
+  }
+}
+
+/**
+ * Marca un item como error sin propagar excepciones de DB.
+ */
+async function marcarErrorSafe(colaId, mensaje) {
+  try {
+    await marcarError(colaId, mensaje);
+  } catch (dbErr) {
+    console.error(`  ⚠️  No se pudo marcar error en DB (id=${colaId}): ${dbErr.message}`);
+  }
+}
+
+/**
+ * Procesa un sub-batch: llama a la API y guarda los embeddings en DB.
+ */
+async function procesarSubBatch(items) {
+  const textos = items.map(extraerTexto);
+
+  let apiData;
+  try {
+    apiData = await llamarAPI(textos);
+  } catch (err) {
+    const msg = err.response?.data?.error?.message || err.message;
+    console.log(`  ❌ Error API: ${msg}`);
+    for (const item of items) {
+      await marcarErrorSafe(item.id, `API error: ${msg}`);
+    }
+    return { guardados: 0, errores: items.length, tokens: 0 };
+  }
+
+  let guardados = 0;
+  let errores = 0;
+  const tokens = apiData.usage?.total_tokens || 0;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const vector = apiData.data[i]?.embedding;
+
+    if (!vector) {
+      await marcarErrorSafe(item.id, 'No se recibió embedding para este item');
+      errores++;
+      continue;
+    }
+
+    try {
+      await guardarEmbedding(item.id, item.entidad_tipo, item.entidad_id, item.campo_embedding, vector);
+      guardados++;
+    } catch (err) {
+      await marcarErrorSafe(item.id, `DB error: ${err.message}`);
+      errores++;
+    }
+  }
+
+  return { guardados, errores, tokens };
+}
+
+async function main() {
+  if (!ZHIPU_API_KEY) {
+    console.error('❌ ZHIPU_API_KEY no configurada en .env');
+    await pool.end();
+    process.exit(1);
+  }
+
+  console.log('=== EMBEDDER NORMAS GBA ===');
+  console.log(`Config: batch=${BATCH_SIZE}, delay=${DELAY_MS}ms, poll=${POLL_INTERVAL / 1000}s, max_tokens_req=${MAX_TOKENS_PER_REQ}\n`);
+
+  let fallosConsecutivos = 0;
+
+  // shutdown se chequea solo al tope del loop — el batch actual siempre se completa entero
+  while (!shutdown) {
+    // --- Obtener batch ---
+    const rows = await obtenerBatchEmbeddings(BATCH_SIZE);
+
+    if (rows.length === 0) {
+      console.log(`[${ts()}] Cola vacía. Esperando ${POLL_INTERVAL / 1000}s...`);
+      await delay(POLL_INTERVAL);
+      continue;
+    }
+
+    batchCount++;
+    console.log(`\n[${ts()}] Batch #${batchCount}: ${rows.length} items`);
+
+    // --- Separar válidos e inválidos ---
+    const validos = [];
+    const sinTexto = [];
+    for (const row of rows) {
+      const texto = extraerTexto(row);
+      if (!texto || !texto.trim()) sinTexto.push(row);
+      else validos.push(row);
+    }
+
+    if (sinTexto.length > 0) {
+      console.log(`  ⚠️  ${sinTexto.length} sin texto → marcando error`);
+      for (const item of sinTexto) {
+        await marcarErrorSafe(item.id, 'Texto vacío o nulo');
+      }
+    }
+
+    if (validos.length === 0) {
+      fallosConsecutivos++;
+      if (fallosConsecutivos >= MAX_FALLOS) {
+        console.error(`❌ FATAL: ${MAX_FALLOS} batches consecutivos sin items válidos. Abortando.`);
+        break;
+      }
+      continue;
+    }
+
+    // --- Info de composición del batch ---
+    const nNormas = validos.filter(r => r.entidad_tipo === 'norma').length;
+    const nArts   = validos.filter(r => r.entidad_tipo === 'articulo').length;
+    if (nNormas > 0) console.log(`  → Normas (embedding_resumen): ${nNormas}`);
+    if (nArts   > 0) console.log(`  → Artículos (embedding):      ${nArts}`);
+
+    // --- Dividir en sub-batches por límite estimado de tokens ---
+    // Estimación conservadora: ~20 tokens/ítem. Textos muy largos pueden aún exceder el límite
+    // individual — en ese caso la API retorna error y el ítem se marca como tal.
+    const MAX_ITEMS_PER_REQ = Math.max(1, Math.floor(MAX_TOKENS_PER_REQ / 20));
+    const subBatches = [];
+    for (let i = 0; i < validos.length; i += MAX_ITEMS_PER_REQ) {
+      subBatches.push(validos.slice(i, i + MAX_ITEMS_PER_REQ));
+    }
+
+    // --- Procesar sub-batches (se procesan todos; shutdown se chequea al volver al tope) ---
+    let bGuardados = 0;
+    let bErrores   = 0;
+    let bTokens    = 0;
+    const t0 = Date.now();
+
+    for (const sub of subBatches) {
+      const { guardados, errores, tokens } = await procesarSubBatch(sub);
+      bGuardados += guardados;
+      bErrores   += errores;
+      bTokens    += tokens;
+    }
+
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    console.log(`  → API: ${bTokens} tokens, ${elapsed}s`);
+    console.log(`  → Guardados: ${bGuardados}/${validos.length}  Errores: ${bErrores}`);
+
+    totalProcesados += bGuardados;
+    totalTokens     += bTokens;
+    console.log(`  Acumulado: ${totalProcesados} procesados, ${totalTokens} tokens`);
+
+    if (bGuardados > 0) {
+      fallosConsecutivos = 0;
+    } else {
+      fallosConsecutivos++;
+      if (fallosConsecutivos >= MAX_FALLOS) {
+        console.error(`❌ FATAL: ${MAX_FALLOS} batches consecutivos fallidos. Abortando.`);
+        break;
+      }
+    }
+
+    if (!shutdown) await delay(DELAY_MS);
+  }
+
+  console.log(`\n✅ Embedder terminado. Total: ${totalProcesados} procesados, ${totalTokens} tokens.`);
+  await pool.end();
+}
+
+main().catch(async e => {
+  console.error('\n❌ ERROR FATAL:', e.message);
+  await pool.end();
+  process.exit(1);
+});
