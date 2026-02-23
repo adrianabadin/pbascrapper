@@ -106,7 +106,7 @@ async function clasificar(resumen, intento = 1) {
     const res = await axios.post(
       `${ZHIPU_BASE_URL}/chat/completions`,
       {
-        model: 'glm-4.7-flash',
+        model: 'glm-4-flash',
         messages: [
           { role: 'system', content: PROMPT_SISTEMA },
           { role: 'user',   content: resumen.slice(0, 1000) },
@@ -166,7 +166,7 @@ async function main() {
   `);
 
   console.log('=== CLASIFICADOR DIFERIDO ===');
-  console.log(`Modelo:    glm-4.7-flash`);
+  console.log(`Modelo:    glm-4-flash`);
   console.log(`Delay:     ${DELAY_MS}ms entre llamadas (~${Math.round(60000/DELAY_MS)} RPM)`);
   console.log(`Pendientes: ${total} normas sin clasificar\n`);
 

@@ -126,7 +126,7 @@ async function clasificarNorma(resumen, intento = 1) {
     const res = await axios.post(
       `${ZHIPU_BASE_URL}/chat/completions`,
       {
-        model: 'glm-4.7-flash',
+        model: 'glm-4-flash',
         messages: [
           { role: 'system', content: PROMPT_SISTEMA },
           { role: 'user',   content: resumen.slice(0, 1000) },
