@@ -52,12 +52,20 @@ async function fetchWithRetry(url, intentos = 3) {
 /**
  * Obtiene el HTML de una página de listing.
  * Retorna { html, totalResultados, totalPaginas }
+ *
+ * @param {string} tipo - clave del TIPO_MAP
+ * @param {number} pagina - número de página (1-20, el sitio capea en 20)
+ * @param {object} [opciones]
+ * @param {string} [opciones.fechaDesde] - fecha inicio en formato DD/MM/YYYY
+ * @param {string} [opciones.fechaHasta] - fecha fin en formato DD/MM/YYYY
  */
-async function fetchListingPage(tipo, pagina = 1) {
+async function fetchListingPage(tipo, pagina = 1, { fechaDesde, fechaHasta } = {}) {
   const rawType = TIPO_MAP[tipo];
   if (!rawType) throw new Error(`Tipo no soportado: ${tipo}`);
 
-  const url = `${BASE_URL}/resultados?page=${pagina}&q%5Bterms%5D%5Braw_type%5D=${rawType}&q%5Bsort%5D=by_publication_date_desc`;
+  let url = `${BASE_URL}/resultados?page=${pagina}&q%5Bterms%5D%5Braw_type%5D=${rawType}&q%5Bsort%5D=by_publication_date_desc`;
+  if (fechaDesde) url += `&q%5Bdate_ranges%5D%5Bpublication_date%5D%5Bgte%5D=${encodeURIComponent(fechaDesde)}`;
+  if (fechaHasta) url += `&q%5Bdate_ranges%5D%5Bpublication_date%5D%5Blte%5D=${encodeURIComponent(fechaHasta)}`;
   const html = await fetchWithRetry(url);
 
   // Extraer total de resultados del texto de paginación

@@ -3,18 +3,55 @@ const { fetchListingPage, fetchDetalle, fetchTextoActualizado, delay, DELAY_MS }
 const { parseListingPage, parseDetallePage, parseTextoActualizado } = require('./parser');
 const { pool, upsertNormaBasica, upsertNormaDetalle, upsertTextoActualizado, upsertRelaciones, inferirIdentidad } = require('./db');
 
-// Parsear argumentos CLI
+// ---------------------------------------------------------------------------
+// CLI args
+// ---------------------------------------------------------------------------
 const args = process.argv.slice(2);
-const tiposArg = args.includes('--tipo')
-  ? [args[args.indexOf('--tipo') + 1]]
-  : ['ley', 'decreto'];
-const desdeAnio = args.includes('--desde')
-  ? parseInt(args[args.indexOf('--desde') + 1])
-  : null;
+
+function argVal(flag) {
+  const i = args.indexOf(flag);
+  return i !== -1 ? args[i + 1] : null;
+}
+
+const TODOS_LOS_TIPOS = ['ley', 'decreto', 'decreto_ley', 'ordenanza_general', 'resolucion', 'disposicion', 'resolucion_conjunta'];
+
+const tiposArg    = argVal('--tipo') ? [argVal('--tipo')] : TODOS_LOS_TIPOS;
 const soloListing = args.includes('--solo-listing');
-const maxPaginas = args.includes('--max-paginas')
-  ? parseInt(args[args.indexOf('--max-paginas') + 1])
-  : null;
+const maxPaginas  = argVal('--max-paginas') ? parseInt(argVal('--max-paginas')) : null;
+
+// --desde-fecha YYYY-MM  (inicio del rango a scrapear)
+// --hasta-fecha YYYY-MM  (fin del rango, default: mes actual)
+const desdeFecha = argVal('--desde-fecha') || '2000-01';
+const hastaFecha = (() => {
+  const v = argVal('--hasta-fecha');
+  if (v) return v;
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+})();
+
+// ---------------------------------------------------------------------------
+// Helpers de fecha
+// ---------------------------------------------------------------------------
+
+/** Último día del mes (ej. ultimoDia(2024, 2) → 29) */
+function ultimoDia(anio, mes) {
+  return new Date(anio, mes, 0).getDate();
+}
+
+/** Formatea como DD/MM/YYYY */
+function fmt(dia, mes, anio) {
+  return `${String(dia).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${anio}`;
+}
+
+/** Parsea 'YYYY-MM' → { anio, mes } */
+function parsearFecha(str) {
+  const [anio, mes] = str.split('-').map(Number);
+  return { anio, mes };
+}
+
+// ---------------------------------------------------------------------------
+// Procesamiento de normas individuales
+// ---------------------------------------------------------------------------
 
 let erroresConsecutivos = 0;
 const MAX_ERRORES_CONSECUTIVOS = 10;
@@ -56,64 +93,89 @@ async function procesarNorma(normaBasica) {
       await upsertRelaciones(normaId, detalle.relaciones);
     }
 
-    erroresConsecutivos = 0; // reset on success
+    erroresConsecutivos = 0;
   } catch (err) {
     erroresConsecutivos++;
     console.error(`\n  ❌ Error en ${normaBasica.url_canonica}: ${err.message}`);
     if (erroresConsecutivos >= MAX_ERRORES_CONSECUTIVOS) {
-      throw new Error(`Abortando: ${MAX_ERRORES_CONSECUTIVOS} errores consecutivos. Último error: ${err.message}`);
+      throw new Error(`Abortando: ${MAX_ERRORES_CONSECUTIVOS} errores consecutivos. Último: ${err.message}`);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scraping mes a mes
+// ---------------------------------------------------------------------------
+
+async function scrapearMes(tipo, anio, mes) {
+  const fechaDesde = fmt(1, mes, anio);
+  const fechaHasta = fmt(ultimoDia(anio, mes), mes, anio);
+  const label = `${anio}-${String(mes).padStart(2, '0')}`;
+
+  const { html: html1, totalResultados, totalPaginas } =
+    await fetchListingPage(tipo, 1, { fechaDesde, fechaHasta });
+
+  if (totalResultados === 0) return; // mes vacío, skip silencioso
+
+  const paginaMaxima = Math.min(maxPaginas || 20, 20, totalPaginas);
+
+  process.stdout.write(`  📅 ${label}: ${totalResultados} normas`);
+  if (totalResultados > 200) {
+    process.stdout.write(` ⚠ > 200 (solo recuperables ${paginaMaxima * 10})`);
+  }
+  console.log(` — ${paginaMaxima} pág${paginaMaxima > 1 ? 's' : ''}`);
+
+  async function procesarPagina(normas) {
+    for (const norma of normas) {
+      process.stdout.write(`    → ${norma.titulo?.slice(0, 60)}... `);
+      await procesarNorma(norma);
+      await delay(DELAY_MS);
+    }
+  }
+
+  // Página 1 (HTML ya disponible)
+  await procesarPagina(parseListingPage(html1));
+
+  // Páginas 2..N
+  for (let pagina = 2; pagina <= paginaMaxima; pagina++) {
+    await delay(DELAY_MS);
+    const { html } = await fetchListingPage(tipo, pagina, { fechaDesde, fechaHasta });
+    await procesarPagina(parseListingPage(html));
   }
 }
 
 async function scrapearTipo(tipo) {
-  console.log(`\n🔍 Scrapeando ${tipo.toUpperCase()}...`);
+  const { anio: desdeAnio, mes: desdeMes } = parsearFecha(desdeFecha);
+  const { anio: hastaAnio, mes: hastaMes } = parsearFecha(hastaFecha);
 
-  const { html: html1, totalResultados, totalPaginas } = await fetchListingPage(tipo, 1);
-  const paginaMaxima = maxPaginas ? Math.min(maxPaginas, totalPaginas) : totalPaginas;
-  console.log(`   Total: ${totalResultados} normas, ${paginaMaxima} páginas a procesar`);
+  console.log(`\n🔍 ${tipo.toUpperCase()} — ${desdeFecha} → ${hastaFecha}`);
 
-  let finalizarTipo = false;
+  let totalNormasTipo = 0;
 
-  // Helper to process a page's normas, returns true if should stop
-  async function procesarPagina(normas) {
-    for (const norma of normas) {
-      if (desdeAnio) {
-        const { anio } = inferirIdentidad(norma.url_canonica);
-        if (anio < desdeAnio) {
-          console.log(`\n   ⏹ Llegamos a ${anio} < ${desdeAnio}, deteniendo.`);
-          return true; // signal to stop
-        }
-      }
-      process.stdout.write(`  → ${norma.titulo}... `);
-      await procesarNorma(norma);
+  for (let anio = desdeAnio; anio <= hastaAnio; anio++) {
+    const mesInicio = (anio === desdeAnio) ? desdeMes : 1;
+    const mesFin    = (anio === hastaAnio) ? hastaMes  : 12;
+
+    for (let mes = mesInicio; mes <= mesFin; mes++) {
+      await scrapearMes(tipo, anio, mes);
+      totalNormasTipo++;
     }
-    return false;
   }
 
-  // Process page 1
-  const normas1 = parseListingPage(html1);
-  finalizarTipo = await procesarPagina(normas1);
-
-  // Process remaining pages
-  for (let pagina = 2; pagina <= paginaMaxima && !finalizarTipo; pagina++) {
-    console.log(`\n📄 Página ${pagina}/${paginaMaxima}...`);
-    await delay(DELAY_MS);
-
-    const { html } = await fetchListingPage(tipo, pagina);
-    const normas = parseListingPage(html);
-    finalizarTipo = await procesarPagina(normas);
-  }
-
-  console.log(`\n✅ ${tipo.toUpperCase()} completado`);
+  console.log(`✅ ${tipo.toUpperCase()} completado`);
 }
 
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
 async function main() {
-  console.log('🚀 Normas GBA Scraper');
-  console.log(`   Tipos: ${tiposArg.join(', ')}`);
-  if (desdeAnio) console.log(`   Desde año: ${desdeAnio}`);
-  if (maxPaginas) console.log(`   Máx páginas: ${maxPaginas}`);
-  if (soloListing) console.log(`   Modo: solo listing (sin detalle)`);
+  console.log('🚀 Normas GBA Scraper — modo mes a mes');
+  console.log(`   Tipos:         ${tiposArg.join(', ')}`);
+  console.log(`   Rango:         ${desdeFecha} → ${hastaFecha}`);
+  if (maxPaginas) console.log(`   Máx pág/mes:   ${maxPaginas}`);
+  if (soloListing) console.log(`   Modo:          solo listing (sin detalle)`);
+  console.log('');
 
   for (const tipo of tiposArg) {
     await scrapearTipo(tipo);
@@ -123,4 +185,8 @@ async function main() {
   console.log('\n🎉 Scraping completado');
 }
 
-main().catch(async (e) => { console.error('FATAL:', e.message); await pool.end(); process.exit(1); });
+main().catch(async (e) => {
+  console.error('FATAL:', e.message);
+  await pool.end();
+  process.exit(1);
+});
