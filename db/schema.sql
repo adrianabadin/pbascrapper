@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS normas (
   embeddings_generados_at TIMESTAMPTZ,
   created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT uq_norma_identidad UNIQUE (tipo, numero, anio),
+  -- uq_norma_identidad: índice parcial definido abajo (solo ley/decreto/decreto_ley)
   CONSTRAINT uq_sitio_id UNIQUE (sitio_id),
   CONSTRAINT chk_anio CHECK (anio BETWEEN 1820 AND 2100)
 );
@@ -123,6 +123,12 @@ CREATE TABLE IF NOT EXISTS historial_cambios (
   hash_nuevo    TEXT NOT NULL,
   detectado_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Identidad única: solo para tipos donde el número es realmente único a nivel provincial
+-- (resoluciones y disposiciones pueden tener el mismo número en distintos organismos)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_norma_identidad
+  ON normas (tipo, numero, anio)
+  WHERE tipo IN ('ley', 'decreto', 'decreto_ley');
 
 -- INDICES FTS
 CREATE INDEX IF NOT EXISTS idx_normas_fts ON normas USING GIN (fts_vector);
