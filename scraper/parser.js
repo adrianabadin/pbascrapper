@@ -148,30 +148,40 @@ function parseTextoActualizado(html) {
     return true;
   });
   parrafos.forEach(el => {
-    // Buscar strong dentro del elemento que sea un artículo
     const strong = el.querySelector('strong');
+    const elText = el.textContent.trim();
+    let esArticulo = false;
+    let numeroArticulo = null;
+
+    // Caso 1: artículo marcado con <strong> (leyes)
     if (strong) {
       const strongText = strong.textContent.trim();
-      if (ARTICULO_REGEX.test(strongText) && !el.textContent.trim().match(/^["'"'«]/)) {
-        // Guardar el artículo anterior
-        if (articuloActual) {
-          articulos.push(articuloActual);
-        }
-        // Iniciar nuevo artículo
-        articuloActual = {
-          numero_articulo: strongText.replace(/[\s°º.\-:]+$/, '').trim(),
-          texto: el.textContent.trim(),
-          orden: orden++,
-        };
-        return;
+      if (ARTICULO_REGEX.test(strongText) && !elText.match(/^["'"'«]/)) {
+        esArticulo = true;
+        numeroArticulo = strongText.replace(/[\s°º.\-:]+$/, '').trim();
       }
     }
+
+    // Caso 2: artículo como texto plano sin <strong> (resoluciones, disposiciones)
+    if (!esArticulo && ARTICULO_REGEX.test(elText) && !elText.match(/^["'"'«]/)) {
+      esArticulo = true;
+      const match = elText.match(ARTICULO_REGEX);
+      numeroArticulo = match[0].replace(/[\s°º.\-:]+$/, '').trim();
+    }
+
+    if (esArticulo) {
+      if (articuloActual) articulos.push(articuloActual);
+      articuloActual = {
+        numero_articulo: numeroArticulo,
+        texto: elText,
+        orden: orden++,
+      };
+      return;
+    }
+
     // Continuar agregando texto al artículo actual
-    if (articuloActual) {
-      const texto = el.textContent.trim();
-      if (texto) {
-        articuloActual.texto += '\n' + texto;
-      }
+    if (articuloActual && elText) {
+      articuloActual.texto += '\n' + elText;
     }
   });
 
