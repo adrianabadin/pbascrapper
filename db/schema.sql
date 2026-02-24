@@ -124,11 +124,12 @@ CREATE TABLE IF NOT EXISTS historial_cambios (
   detectado_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Identidad única: solo para tipos donde el número es realmente único a nivel provincial
--- (resoluciones y disposiciones pueden tener el mismo número en distintos organismos)
+-- Identidad única: solo para tipos donde el número es estrictamente entero y único.
+-- Decretos quedan excluidos: pueden tener sufijos alfanuméricos (196B, 196C, etc.)
+-- que parseInt() aplana a 196, causando colisiones. sitio_id los distingue realmente.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_norma_identidad
   ON normas (tipo, numero, anio)
-  WHERE tipo IN ('ley', 'decreto', 'decreto_ley');
+  WHERE tipo IN ('ley', 'decreto_ley');
 
 -- INDICES FTS
 CREATE INDEX IF NOT EXISTS idx_normas_fts ON normas USING GIN (fts_vector);
