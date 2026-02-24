@@ -134,18 +134,33 @@ function parseTextoActualizado(html) {
   let articuloActual = null;
   let orden = 0;
 
-  // Regex para detectar inicio de artículo. Cubre tres formatos del sitio:
-  //   1. ARTÍCULO 1°.-   → leyes nuevas con <strong>
-  //   2. ARTÍCULO 1°:    → resoluciones/disposiciones, texto plano
-  //   3. Art. 1° -       → leyes antiguas (pre-2005 aprox.), texto plano abreviado
-  const ARTICULO_REGEX = /^(ART[IÍ]CULO|ARTICULO|Art\.)\s*\d+\s*[°º]?\s*(BIS|TER|QUATER)?(\s*[.°\-:])?/i;
+  // Regex para detectar inicio de artículo. Cubre todos los formatos observados:
+  //   1. ARTÍCULO 1°.-    → leyes nuevas con <strong>
+  //   2. ARTÍCULO 1°:     → resoluciones/disposiciones, texto plano
+  //   3. Art. 1° -        → leyes antiguas (pre-2005), texto plano abreviado
+  //   4. ARTÍCULO.1º      → variante con punto pegado al número (ej: ley 14180)
+  //   5. ARTÍCULO - 2º    → variante con guión separador
+  const ARTICULO_REGEX = /^(ART[IÍ]CULO|ARTICULO|Art\.)\s*[.\-]?\s*\d+\s*[°º]?\s*(BIS|TER|QUATER)?(\s*[.°\-:])?/i;
 
-  // Get all p and div elements, but exclude divs that contain other p/div elements
-  // (i.e., only process "leaf" elements) to avoid double-processing when p is inside div
-  const allEls = Array.from(doc.querySelectorAll('p, div'));
+  // Seleccionar elementos procesables. Estrategia:
+  //   - <p> siempre incluidos (formato principal)
+  //   - <div> solo si no tiene hijos <p>/<div> (evitar doble procesado)
+  //   - <h2>-<h4> siempre: documentos Word exportados usan headings para artículos
+  //     (ej: ley 11876/1996: body > div > h3[ARTICULO 1.-...])
+  //   - <span> solo si no hay <p>/<div> antecesores (body-level spans)
+  const allEls = Array.from(doc.querySelectorAll('p, div, h2, h3, h4, span'));
   const parrafos = allEls.filter(el => {
-    if (el.tagName === 'DIV' && el.querySelector('p, div')) return false;
-    return true;
+    const tag = el.tagName;
+    if (tag === 'DIV') {
+      return !el.querySelector('p, div, h2, h3, h4'); // excluir divs con hijos bloque
+    }
+    if (tag === 'SPAN') {
+      if (el.closest('p, h2, h3, h4')) return false; // ya procesado via su padre heading/p
+      const parentDiv = el.closest('div');
+      if (parentDiv && parentDiv.querySelector('p, div, h2, h3, h4')) return false;
+      return true;
+    }
+    return true; // <p>, <h2>, <h3>, <h4>
   });
   parrafos.forEach(el => {
     const strong = el.querySelector('strong');
