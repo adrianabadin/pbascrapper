@@ -17,8 +17,8 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const crypto  = require('crypto');
 const { Pool } = require('pg');
-const { fetchTextoActualizado, delay, DELAY_MS: DELAY_DEFAULT } = require('../scraper/crawler');
-const { parseTextoActualizado } = require('../scraper/parser');
+const { fetchTextoActualizado, fetchPdf, delay, DELAY_MS: DELAY_DEFAULT } = require('../scraper/crawler');
+const { parseTextoActualizado, parseTextoFromPdf } = require('../scraper/parser');
 
 const pool    = new Pool({ connectionString: process.env.DATABASE_URL });
 const DELAY   = parseInt(process.env.SCRAPER_DELAY_MS || DELAY_DEFAULT || '500');
@@ -45,9 +45,9 @@ async function obtenerPendientes() {
   const where = filtros.length ? 'AND ' + filtros.join(' AND ') : '';
 
   const { rows } = await pool.query(`
-    SELECT n.id, n.tipo, n.numero, n.anio, n.url_texto_actualizado
+    SELECT n.id, n.tipo, n.numero, n.anio, n.url_texto_actualizado, n.url_texto_original
     FROM normas n
-    WHERE n.url_texto_actualizado IS NOT NULL
+    WHERE (n.url_texto_actualizado IS NOT NULL OR n.url_texto_original IS NOT NULL)
       ${where}
       AND NOT EXISTS (SELECT 1 FROM articulos a WHERE a.norma_id = n.id)
     ORDER BY n.tipo, n.anio DESC, n.numero
@@ -67,7 +67,7 @@ async function contarPendientes() {
 
   const { rows } = await pool.query(`
     SELECT COUNT(*) AS total FROM normas n
-    WHERE n.url_texto_actualizado IS NOT NULL
+    WHERE (n.url_texto_actualizado IS NOT NULL OR n.url_texto_original IS NOT NULL)
       ${where}
       AND NOT EXISTS (SELECT 1 FROM articulos a WHERE a.norma_id = n.id)
   `, params);
@@ -166,12 +166,36 @@ async function main() {
       process.stdout.write(`  ${label}... `);
 
       try {
-        const html      = await fetchTextoActualizado(norma.url_texto_actualizado);
-        const articulos = parseTextoActualizado(html);
+        let articulos = [];
+        let textoParaHash = null;
+        let fuente = null;
+
+        if (norma.url_texto_actualizado) {
+          const html = await fetchTextoActualizado(norma.url_texto_actualizado);
+          articulos = parseTextoActualizado(html);
+          if (articulos.length > 0) {
+            textoParaHash = html;
+            fuente = 'html';
+          }
+        }
+
+        // Fallback a PDF si HTML no dio artículos
+        if (articulos.length === 0 && norma.url_texto_original) {
+          try {
+            const pdfBuf = await fetchPdf(norma.url_texto_original);
+            articulos = await parseTextoFromPdf(pdfBuf);
+            if (articulos.length > 0) {
+              textoParaHash = articulos.map(a => `${a.numero_articulo}. ${a.texto}`).join('\n\n');
+              fuente = 'pdf';
+            }
+          } catch (pdfErr) {
+            // PDF no accesible — no es error crítico
+          }
+        }
 
         if (articulos.length > 0) {
-          await guardarArticulos(norma.id, html, articulos);
-          process.stdout.write(`✅ ${articulos.length} arts\n`);
+          await guardarArticulos(norma.id, textoParaHash, articulos);
+          process.stdout.write(`✅ ${articulos.length} arts (${fuente})\n`);
           reparadas++;
         } else {
           process.stdout.write(`— sin arts\n`);

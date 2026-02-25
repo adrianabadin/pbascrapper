@@ -10,12 +10,13 @@
     "test": "jest --testEnvironment node --passWithNoTests"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "axios": "^1.7.0",
     "dotenv": "^16.4.0",
     "jsdom": "^25.0.0",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.13.0",
-    "zod": "^3.23.0",
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "zod": "^3.23.0"
   },
   "devDependencies": {
     "jest": "^29.0.0"

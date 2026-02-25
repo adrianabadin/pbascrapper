@@ -104,4 +104,32 @@ async function fetchTextoActualizado(urlDocumento) {
   return fetchWithRetry(url);
 }
 
-module.exports = { fetchListingPage, fetchDetalle, fetchTextoActualizado, delay, DELAY_MS, BASE_URL };
+/**
+ * Descarga un PDF y retorna su contenido como Buffer.
+ * Soporta URLs absolutas (externos) y relativas (prefijadas con BASE_URL).
+ */
+async function fetchPdf(urlDocumento, intentos = 3) {
+  const url = urlDocumento.startsWith('http') ? urlDocumento : `${BASE_URL}${urlDocumento}`;
+  for (let i = 0; i < intentos; i++) {
+    try {
+      const response = await axios.get(url, {
+        responseType: 'arraybuffer',
+        timeout: 30000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; normas-gba-scraper/1.0)',
+        },
+      });
+      return Buffer.from(response.data);
+    } catch (err) {
+      if (err.response && [403, 404, 410].includes(err.response.status)) {
+        throw err;
+      }
+      if (i === intentos - 1) throw err;
+      const wait = 1000 * Math.pow(2, i);
+      console.warn(`  ⚠ Reintento PDF ${i + 1}/${intentos} para ${url} (espera ${wait}ms)`);
+      await delay(wait);
+    }
+  }
+}
+
+module.exports = { fetchListingPage, fetchDetalle, fetchTextoActualizado, fetchPdf, delay, DELAY_MS, BASE_URL };

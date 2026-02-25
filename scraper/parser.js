@@ -123,6 +123,57 @@ function parseDetallePage(html, urlCanonica) { // urlCanonica reserved for futur
   return data;
 }
 
+// Regex para detectar inicio de artículo. Cubre todos los formatos observados:
+//   1. ARTÍCULO 1°.-    → leyes nuevas con <strong>
+//   2. ARTÍCULO 1°:     → resoluciones/disposiciones, texto plano
+//   3. Art. 1° -        → leyes antiguas (pre-2005), texto plano abreviado
+//   4. ARTÍCULO.1º      → variante con punto pegado al número (ej: ley 14180)
+//   5. ARTÍCULO - 2º    → variante con guión separador
+const ARTICULO_REGEX = /^(ART[IÍ]CULO|ARTICULO|Art\.)\s*[.\-]?\s*\d+\s*[°º]?\s*(BIS|TER|QUATER)?(\s*[.°\-:])?/i;
+
+/**
+ * Extrae artículos de texto plano (ej: extraído de PDF).
+ * Retorna array de { numero_articulo, texto, orden }
+ */
+function parseArticulosFromPlainText(texto) {
+  const lineas = texto.split('\n');
+  const articulos = [];
+  let articuloActual = null;
+  let orden = 0;
+
+  for (const linea of lineas) {
+    const elText = linea.trim();
+    if (!elText) continue;
+
+    if (ARTICULO_REGEX.test(elText) && !elText.match(/^["'"'«]/)) {
+      if (articuloActual) articulos.push(articuloActual);
+      const match = elText.match(ARTICULO_REGEX);
+      const numeroArticulo = match[0].replace(/[\s°º.\-:]+$/, '').trim();
+      articuloActual = { numero_articulo: numeroArticulo, texto: elText, orden: orden++ };
+    } else if (articuloActual) {
+      articuloActual.texto += '\n' + elText;
+    }
+  }
+
+  if (articuloActual) articulos.push(articuloActual);
+  return articulos;
+}
+
+/**
+ * Parsea un Buffer de PDF y extrae artículos.
+ * Retorna array de { numero_articulo, texto, orden }, o [] si el PDF está escaneado/falla.
+ */
+async function parseTextoFromPdf(pdfBuffer) {
+  try {
+    const pdfParse = require('pdf-parse');
+    const result = await pdfParse(pdfBuffer);
+    if (!result.text || result.text.trim().length < 20) return [];
+    return parseArticulosFromPlainText(result.text);
+  } catch (err) {
+    return [];
+  }
+}
+
 /**
  * Parsea el HTML del texto actualizado extrayendo artículos individuales.
  * Retorna array de { numero_articulo, texto, orden }
@@ -133,14 +184,6 @@ function parseTextoActualizado(html) {
   const articulos = [];
   let articuloActual = null;
   let orden = 0;
-
-  // Regex para detectar inicio de artículo. Cubre todos los formatos observados:
-  //   1. ARTÍCULO 1°.-    → leyes nuevas con <strong>
-  //   2. ARTÍCULO 1°:     → resoluciones/disposiciones, texto plano
-  //   3. Art. 1° -        → leyes antiguas (pre-2005), texto plano abreviado
-  //   4. ARTÍCULO.1º      → variante con punto pegado al número (ej: ley 14180)
-  //   5. ARTÍCULO - 2º    → variante con guión separador
-  const ARTICULO_REGEX = /^(ART[IÍ]CULO|ARTICULO|Art\.)\s*[.\-]?\s*\d+\s*[°º]?\s*(BIS|TER|QUATER)?(\s*[.°\-:])?/i;
 
   // Seleccionar elementos procesables. Estrategia:
   //   - <p> siempre incluidos (formato principal)
@@ -251,4 +294,4 @@ function parseNormaUrl(url) {
   };
 }
 
-module.exports = { parseListingPage, parseDetallePage, parseTextoActualizado, parseNormaUrl };
+module.exports = { parseListingPage, parseDetallePage, parseTextoActualizado, parseTextoFromPdf, parseNormaUrl };

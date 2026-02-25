@@ -1,6 +1,6 @@
 require('dotenv').config();
-const { fetchListingPage, fetchDetalle, fetchTextoActualizado, delay, DELAY_MS } = require('./crawler');
-const { parseListingPage, parseDetallePage, parseTextoActualizado } = require('./parser');
+const { fetchListingPage, fetchDetalle, fetchTextoActualizado, fetchPdf, delay, DELAY_MS } = require('./crawler');
+const { parseListingPage, parseDetallePage, parseTextoActualizado, parseTextoFromPdf } = require('./parser');
 const { pool, upsertNormaBasica, upsertNormaDetalle, upsertTextoActualizado, upsertRelaciones, inferirIdentidad } = require('./db');
 
 // ---------------------------------------------------------------------------
@@ -73,17 +73,36 @@ async function procesarNorma(normaBasica) {
     const { sitio_id } = inferirIdentidad(normaBasica.url_canonica);
     await upsertNormaDetalle(sitio_id, detalle);
 
-    // 3. Scrape texto actualizado (si existe)
+    // 3. Scrape texto actualizado, con fallback a PDF
+    let articulos = [];
+    let textoParaHash = null;
+    let fuente = null;
+
     if (detalle.url_texto_actualizado) {
       await delay(DELAY_MS);
-      const textoHtml = await fetchTextoActualizado(detalle.url_texto_actualizado);
-      const articulos = parseTextoActualizado(textoHtml);
-      const cambio = await upsertTextoActualizado(normaId, textoHtml, articulos);
-      if (cambio) {
-        console.log(`📝 ${articulos.length} artículos`);
-      } else {
-        console.log(`✓ sin cambios`);
+      textoParaHash = await fetchTextoActualizado(detalle.url_texto_actualizado);
+      articulos = parseTextoActualizado(textoParaHash);
+      if (articulos.length > 0) fuente = 'html';
+    }
+
+    // Fallback a PDF si HTML no dio artículos
+    if (articulos.length === 0 && detalle.url_texto_original) {
+      try {
+        await delay(DELAY_MS);
+        const pdfBuf = await fetchPdf(detalle.url_texto_original);
+        articulos = await parseTextoFromPdf(pdfBuf);
+        if (articulos.length > 0) {
+          textoParaHash = articulos.map(a => `${a.numero_articulo}. ${a.texto}`).join('\n\n');
+          fuente = 'pdf';
+        }
+      } catch (err) {
+        console.warn(`  ⚠ PDF fallback: ${err.response?.status || err.message}`);
       }
+    }
+
+    if (fuente) {
+      const cambio = await upsertTextoActualizado(normaId, textoParaHash, articulos);
+      console.log(cambio ? `📝 ${articulos.length} artículos (${fuente})` : `✓ sin cambios`);
     } else {
       console.log(`- sin texto`);
     }

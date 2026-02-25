@@ -1,4 +1,7 @@
-const { parseListingPage, parseDetallePage, parseTextoActualizado } = require('../../scraper/parser');
+jest.mock('pdf-parse', () => jest.fn());
+
+const { parseListingPage, parseDetallePage, parseTextoActualizado, parseTextoFromPdf } = require('../../scraper/parser');
+const pdfParse = require('pdf-parse');
 
 // HTML mínimo del listing basado en la estructura real del sitio
 const LISTING_HTML = `
@@ -86,6 +89,42 @@ describe('parseDetallePage', () => {
       destino_numero: 14528,
       destino_anio: 2013,
     });
+  });
+});
+
+describe('parseTextoFromPdf', () => {
+  beforeEach(() => pdfParse.mockReset());
+
+  test('extrae artículos de texto PDF simulado', async () => {
+    pdfParse.mockResolvedValue({
+      text: 'ARTÍCULO 1°.- El objeto de la presente ley.\nTexto adicional.\nARTÍCULO 2°.- Derogase toda norma contraria.',
+    });
+    const articulos = await parseTextoFromPdf(Buffer.from('fake'));
+    expect(articulos.length).toBe(2);
+    expect(articulos[0].numero_articulo).toMatch(/ARTÍCULO 1/i);
+    expect(articulos[0].texto).toContain('El objeto de la presente ley');
+    expect(articulos[1].numero_articulo).toMatch(/ARTÍCULO 2/i);
+  });
+
+  test('retorna [] para PDF escaneado (texto vacío)', async () => {
+    pdfParse.mockResolvedValue({ text: '   ' });
+    const articulos = await parseTextoFromPdf(Buffer.from('fake'));
+    expect(articulos).toEqual([]);
+  });
+
+  test('retorna [] en error de pdf-parse', async () => {
+    pdfParse.mockRejectedValue(new Error('Invalid PDF'));
+    const articulos = await parseTextoFromPdf(Buffer.from('bad'));
+    expect(articulos).toEqual([]);
+  });
+
+  test('formato Art. N° funciona en texto plano', async () => {
+    pdfParse.mockResolvedValue({
+      text: 'Art. 1° - Objeto.\nArt. 2° - Vigencia.',
+    });
+    const articulos = await parseTextoFromPdf(Buffer.from('fake'));
+    expect(articulos.length).toBe(2);
+    expect(articulos[0].numero_articulo).toMatch(/Art\. 1/i);
   });
 });
 
