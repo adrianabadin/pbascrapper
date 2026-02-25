@@ -54,7 +54,7 @@ function parsearFecha(str) {
 // ---------------------------------------------------------------------------
 
 let erroresConsecutivos = 0;
-const MAX_ERRORES_CONSECUTIVOS = 10;
+const MAX_ERRORES_CONSECUTIVOS = 25; // solo errores de red, no HTTP del sitio
 
 async function procesarNorma(normaBasica) {
   try {
@@ -95,10 +95,17 @@ async function procesarNorma(normaBasica) {
 
     erroresConsecutivos = 0;
   } catch (err) {
-    erroresConsecutivos++;
+    const status = err.response?.status;
     console.error(`\n  ❌ Error en ${normaBasica.url_canonica}: ${err.message}`);
+
+    // Errores HTTP del sitio (4xx/5xx): la norma está rota/no disponible en el servidor.
+    // No cuentan como error sistémico — el sitio sigue funcionando, solo esa norma falla.
+    if (status) return;
+
+    // Errores de red (timeout, ECONNREFUSED, etc.): pueden indicar problema sistémico.
+    erroresConsecutivos++;
     if (erroresConsecutivos >= MAX_ERRORES_CONSECUTIVOS) {
-      throw new Error(`Abortando: ${MAX_ERRORES_CONSECUTIVOS} errores consecutivos. Último: ${err.message}`);
+      throw new Error(`Abortando: ${MAX_ERRORES_CONSECUTIVOS} errores de red consecutivos. Último: ${err.message}`);
     }
   }
 }
