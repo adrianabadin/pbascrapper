@@ -218,6 +218,9 @@ async function procesarSubBatch(items, subIdx) {
         if (categorias.length > 0) {
           await guardarCategorias(item.entidad_id, categorias);
           clasificados++;
+        } else {
+          // Sin categorías válidas: marcar explícitamente para detectar y re-procesar luego
+          await guardarCategorias(item.entidad_id, ['sin_clasificar']);
         }
       }
     } catch (err) {
