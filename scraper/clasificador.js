@@ -16,6 +16,9 @@ const { Pool } = require('pg');
 
 const ZHIPU_API_KEY   = process.env.ZHIPU_API_KEY;
 const ZHIPU_BASE_URL  = process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4';
+const GROQ_API_KEY    = process.env.GROQ_API_KEY;
+const GROQ_BASE_URL   = process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1';
+const OPENAI_API_KEY  = process.env.OPENAI_API_KEY;
 const DELAY_MS        = parseInt(process.env.CLASSIFY_DELAY_MS   || '2000');
 const BATCH_SIZE      = parseInt(process.env.CLASSIFY_BATCH_SIZE || '100');
 
@@ -101,7 +104,7 @@ function ts() {
   return new Date().toTimeString().slice(0, 8);
 }
 
-async function clasificar(resumen, intento = 1) {
+async function clasificarConZhipu(resumen, intento = 1) {
   try {
     const res = await axios.post(
       `${ZHIPU_BASE_URL}/chat/completions`,
@@ -122,7 +125,7 @@ async function clasificar(resumen, intento = 1) {
     if (cats.length === 0) {
       process.stdout.write(` [raw:"${respuesta.slice(0, 80)}"]`);
     }
-    return cats;
+    return { categorias: cats, proveedor: 'zhipu' };
   } catch (err) {
     const status = err.response?.status;
     const msg    = err.response?.data?.error?.message || err.response?.data?.message || err.message;
@@ -131,12 +134,97 @@ async function clasificar(resumen, intento = 1) {
       const wait = Math.min(5000 * intento, 30000);
       process.stdout.write(` [RL ${intento}/5, ${wait/1000}s]`);
       await delay(wait);
-      return clasificar(resumen, intento + 1);
+      return clasificarConZhipu(resumen, intento + 1);
     }
 
-    console.error(`\n  ❌ HTTP ${status || 'ERR'}: ${msg}`);
-    return [];
+    throw err;
   }
+}
+
+async function clasificarConGroq(resumen, intento = 1) {
+  if (!GROQ_API_KEY) throw new Error('GROQ_API_KEY no configurada');
+
+  try {
+    const res = await axios.post(
+      `${GROQ_BASE_URL}/chat/completions`,
+      {
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: PROMPT_SISTEMA },
+          { role: 'user',   content: resumen.slice(0, 1000) },
+        ],
+        temperature: 0,
+        max_tokens: 50,
+      },
+      { headers: { Authorization: `Bearer ${GROQ_API_KEY}` }, timeout: 30000 }
+    );
+
+    const respuesta = res.data.choices[0]?.message?.content?.trim() || '';
+    const cats = parsearCategorias(respuesta);
+    return { categorias: cats, proveedor: 'groq' };
+  } catch (err) {
+    const status = err.response?.status;
+    if (status === 429 && intento <= 3) {
+      const wait = Math.min(5000 * intento, 20000);
+      await delay(wait);
+      return clasificarConGroq(resumen, intento + 1);
+    }
+    throw err;
+  }
+}
+
+async function clasificarConOpenAI(resumen, intento = 1) {
+  if (!OPENAI_API_KEY) throw new Error('OPENAI_API_KEY no configurada');
+
+  try {
+    const res = await axios.post(
+      'https://api.openai.com/v1/chat/completions',
+      {
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: PROMPT_SISTEMA },
+          { role: 'user',   content: resumen.slice(0, 1000) },
+        ],
+        temperature: 0,
+        max_tokens: 50,
+      },
+      { headers: { Authorization: `Bearer ${OPENAI_API_KEY}` }, timeout: 30000 }
+    );
+
+    const respuesta = res.data.choices[0]?.message?.content?.trim() || '';
+    const cats = parsearCategorias(respuesta);
+    return { categorias: cats, proveedor: 'openai' };
+  } catch (err) {
+    const status = err.response?.status;
+    if (status === 429 && intento <= 3) {
+      const wait = Math.min(5000 * intento, 20000);
+      await delay(wait);
+      return clasificarConOpenAI(resumen, intento + 1);
+    }
+    throw err;
+  }
+}
+
+async function clasificarConFallback(resumen) {
+  try {
+    return await clasificarConZhipu(resumen);
+  } catch (err) {
+    console.log(`    [zhipu] ❌ Falló: ${err.message}`);
+  }
+
+  try {
+    return await clasificarConGroq(resumen);
+  } catch (err) {
+    console.log(`    [groq] ❌ Falló: ${err.message}`);
+  }
+
+  try {
+    return await clasificarConOpenAI(resumen);
+  } catch (err) {
+    console.log(`    [openai] ❌ Falló: ${err.message}`);
+  }
+
+  return { categorias: ['NO_CLASIFICADO'], proveedor: 'fallback' };
 }
 
 async function obtenerPendientes(limite) {
@@ -153,8 +241,8 @@ async function obtenerPendientes(limite) {
 }
 
 async function main() {
-  if (!ZHIPU_API_KEY) {
-    console.error('❌ ZHIPU_API_KEY no configurada en .env');
+  if (!ZHIPU_API_KEY && !GROQ_API_KEY && !OPENAI_API_KEY) {
+    console.error('❌ Se requiere al menos una API key configurada en .env (ZHIPU_API_KEY, GROQ_API_KEY u OPENAI_API_KEY)');
     process.exit(1);
   }
 
@@ -166,7 +254,9 @@ async function main() {
   `);
 
   console.log('=== CLASIFICADOR DIFERIDO ===');
-  console.log(`Modelo:    glm-4-flash`);
+  console.log(`Zhipu:    ${ZHIPU_API_KEY ? '✓' : '✗'} (glm-4-flash)`);
+  console.log(`Groq:      ${GROQ_API_KEY ? '✓' : '✗'} (llama-3.3-70b-versatile)`);
+  console.log(`OpenAI:    ${OPENAI_API_KEY ? '✓' : '✗'} (gpt-4o)`);
   console.log(`Delay:     ${DELAY_MS}ms entre llamadas (~${Math.round(60000/DELAY_MS)} RPM)`);
   console.log(`Pendientes: ${total} normas sin clasificar\n`);
 
@@ -194,14 +284,14 @@ async function main() {
 
       process.stdout.write(`  ${norma.tipo} ${norma.numero}/${norma.anio}... `);
 
-      const categorias = await clasificar(norma.resumen);
+      const { categorias, proveedor } = await clasificarConFallback(norma.resumen);
 
       if (categorias.length > 0) {
         await pool.query(
           'UPDATE normas SET area_tematica = $1 WHERE id = $2',
           [categorias, norma.id]
         );
-        process.stdout.write(`[${categorias.join(', ')}]\n`);
+        process.stdout.write(`[${categorias.join(', ')}] (${proveedor})\n`);
         clasificados++;
       } else {
         process.stdout.write(`[sin categoría]\n`);
