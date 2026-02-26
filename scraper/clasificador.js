@@ -124,6 +124,7 @@ async function clasificarConZhipu(resumen, intento = 1) {
     const cats = parsearCategorias(respuesta);
     if (cats.length === 0) {
       process.stdout.write(` [raw:"${respuesta.slice(0, 80)}"]`);
+      throw new Error('No se obtuvieron categorías válidas de la respuesta');
     }
     return { categorias: cats, proveedor: 'zhipu' };
   } catch (err) {
@@ -161,6 +162,10 @@ async function clasificarConGroq(resumen, intento = 1) {
 
     const respuesta = res.data.choices[0]?.message?.content?.trim() || '';
     const cats = parsearCategorias(respuesta);
+    if (cats.length === 0) {
+      process.stdout.write(` [raw:"${respuesta.slice(0, 80)}"]`);
+      throw new Error('No se obtuvieron categorías válidas de la respuesta');
+    }
     return { categorias: cats, proveedor: 'groq' };
   } catch (err) {
     const status = err.response?.status;
@@ -193,6 +198,10 @@ async function clasificarConOpenAI(resumen, intento = 1) {
 
     const respuesta = res.data.choices[0]?.message?.content?.trim() || '';
     const cats = parsearCategorias(respuesta);
+    if (cats.length === 0) {
+      process.stdout.write(` [raw:"${respuesta.slice(0, 80)}"]`);
+      throw new Error('No se obtuvieron categorías válidas de la respuesta');
+    }
     return { categorias: cats, proveedor: 'openai' };
   } catch (err) {
     const status = err.response?.status;
