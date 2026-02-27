@@ -24,11 +24,12 @@ const BATCH_SIZE      = parseInt(process.env.CLASSIFY_BATCH_SIZE || '100');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-const CATEGORIAS = [
+  const CATEGORIAS = [
   'urbanismo', 'medio_ambiente', 'salud', 'educacion', 'tributos',
   'seguridad', 'obras_publicas', 'empleo', 'municipal', 'civil',
   'administrativo', 'transporte', 'vivienda', 'agropecuario',
   'derechos_sociales', 'presupuesto',
+  'SIN_CLASIFICAR',
 ];
 
 // Sinónimos / variantes con acento que el modelo puede devolver → categoría canónica
@@ -233,7 +234,7 @@ async function clasificarConFallback(resumen) {
     console.log(`    [openai] ❌ Falló: ${err.message}`);
   }
 
-  return { categorias: ['NO_CLASIFICADO'], proveedor: 'fallback' };
+  return { categorias: ['NO_CLASIFICADO'], proveedor: 'reclasificación' };
 }
 
 async function obtenerPendientes(limite) {
@@ -243,6 +244,10 @@ async function obtenerPendientes(limite) {
     WHERE resumen IS NOT NULL
       AND resumen != ''
       AND (area_tematica IS NULL OR array_length(area_tematica, 1) IS NULL)
+      AND (area_tematica IS NULL OR EXISTS (
+        SELECT 1 FROM unnest(area_tematica) elem 
+        WHERE lower(elem) IN ('sin clasificar', 'sin_clasificar', '{sin_clasificar}')
+      ))
     ORDER BY anio DESC, tipo
     LIMIT $1
   `, [limite]);
@@ -302,10 +307,10 @@ async function main() {
         );
         process.stdout.write(`[${categorias.join(', ')}] (${proveedor})\n`);
         clasificados++;
-      } else {
-        process.stdout.write(`[sin categoría]\n`);
-        errores++;
-      }
+        } else {
+          process.stdout.write(`[NO_CLASIFICADO] (reclasificación)\n`);
+          errores++;
+        }
 
       procesados++;
 

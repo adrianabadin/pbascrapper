@@ -1,11 +1,15 @@
 {
   "mcpServers": {
     "postgres-normas": {
-      "command": "C:\\Users\\Adria\\AppData\\Local\\Packages\\PythonSoftwareFoundation.Python.3.12_qbz5n2kfra8p0\\LocalCache\\local-packages\\Python312\\Scripts\\postgres-mcp.exe",
+      "command": "uv",
       "args": [
-        "postgresql://adrian:!DarthHobbit%25@thecodersteam.com:5432/pba_normas",
+        "run",
+        "postgres-mcp",
         "--access-mode=unrestricted"
-      ]
+      ],
+      "env": {
+        "DATABASE_URI": "postgresql://adrian:!DarthHobbit%25@thecodersteam.com:5432/pba_normas"
+      }
     }
   }
 }
