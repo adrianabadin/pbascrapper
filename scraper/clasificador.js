@@ -82,16 +82,58 @@ function parsearCategorias(respuesta) {
   return [...resultado];
 }
 
-const PROMPT_SISTEMA = `Clasificá la siguiente norma legal de la Provincia de Buenos Aires.
+const PROMPT_SISTEMA = `
+Eres un experto en clasificación de normativas argentinas de la Provincia de Buenos Aires.
 
-Respondé SOLO con los nombres de categoría separados por coma. Sin explicaciones, sin puntos, sin numeración.
+# TAREA
+Analiza el siguiente RESUMEN de una norma y clasifícala en una o más de estas 16 categorías temáticas canónicas:
+${CATEGORIAS.join(', ')}
 
-Categorías (usá exactamente estos nombres):
-administrativo, agropecuario, civil, derechos_sociales, educacion, empleo, medio_ambiente, municipal, obras_publicas, presupuesto, salud, seguridad, transporte, tributos, urbanismo, vivienda
+# REGLAS DE CLASIFICACIÓN
 
-Elegí entre 1 y 3 categorías. Solo los nombres, nada más.
-Ejemplo correcto: salud, empleo
-Ejemplo incorrecto: La norma pertenece a la categoría salud`;
+## 1. Selección de Categorías
+- Selecciona 1 a 4 categorías que mejor describan el contenido del resumen
+- Usa EXACTAMENTE estos nombres de categoría (sin acentos, sin variaciones)
+- Prioriza la clasificación precisa sobre la cantidad de categorías
+- Categorías con significados similares pero diferentes (ej: "educación" vs "enseñanza") son distintas
+
+## 2. Formato de Salida
+- Devuelve SOLAMENTE las categorías seleccionadas
+- Separadas por comas seguidas de espacio
+- Sin texto adicional, sin explicaciones, sin prefacios
+- Sin formato JSON, sin números, sin viñetas
+
+Ejemplos:
+✅ Correcto: administrativo, tributos
+❌ Incorrecto: Las categorías son: administrativo y tributos
+❌ Incorrecto: "administrativo", "tributos"
+❌ Incorrecto: 1. administrativo, 2. tributos
+❌ Incorrecto: Categoría: administrativo
+❌ Incorrecto: Son normativas de tipo: administrativo
+
+## 3. Manejo de Casos Difíciles
+### Si el resumen es muy corto (< 50 caracteres):
+- Intenta inferir del tipo de norma (ley, decreto, resolución, etc.)
+- Si no hay contexto claro, responde con la categoría más probable basada en palabras clave
+- Ejemplo: "modifica el reglamento..." → municipal
+
+### Si el resumen contiene frases indicativas de "sin clasificar":
+- DETÉCTALAS ANTES de procesar
+- Las siguientes variantes significan que la clasificación anterior falló:
+  "sin clasificar", "sin_clasificar", "{sin_clasificar}", "sin categoría"
+- Si se detecta alguna de estas, ASIGNA "SIN_CLASIFICAR" (no otra categoría)
+- Estas normas deben ser RECLASIFICADAS, no clasificadas con una nueva categoría
+
+### Si el resumen es genérico o ambiguo:
+- Selecciona hasta 2 categorías que capturen diferentes aspectos
+- Sé lo más específico posible con la información disponible
+- Usa "administrativo" como categoría predeterminada si no hay suficiente información
+
+# RESUMEN A CLASIFICAR
+${resumen.slice(0, 800)}
+
+# TU RESPUESTA (solo categorías)
+`;
 
 let shutdown = false;
 process.on('SIGINT',  () => { console.log('\n⏹  SIGINT — terminando...'); shutdown = true; });
@@ -113,7 +155,7 @@ async function clasificarConZhipu(resumen, intento = 1) {
         model: 'glm-4-flash',
         messages: [
           { role: 'system', content: PROMPT_SISTEMA },
-          { role: 'user',   content: resumen.slice(0, 1000) },
+          { role: 'user',   content: resumen.slice(0, 800) },
         ],
         temperature: 0,
         max_tokens: 50,
@@ -153,7 +195,7 @@ async function clasificarConGroq(resumen, intento = 1) {
         model: 'llama-3.3-70b-versatile',
         messages: [
           { role: 'system', content: PROMPT_SISTEMA },
-          { role: 'user',   content: resumen.slice(0, 1000) },
+          { role: 'user',   content: resumen.slice(0, 800) },
         ],
         temperature: 0,
         max_tokens: 50,
@@ -189,7 +231,7 @@ async function clasificarConOpenAI(resumen, intento = 1) {
         model: 'gpt-4o',
         messages: [
           { role: 'system', content: PROMPT_SISTEMA },
-          { role: 'user',   content: resumen.slice(0, 1000) },
+          { role: 'user',   content: resumen.slice(0, 800) },
         ],
         temperature: 0,
         max_tokens: 50,
