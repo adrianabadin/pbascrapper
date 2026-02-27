@@ -155,7 +155,7 @@ async function clasificarConZhipu(resumen, intento = 1) {
         model: 'glm-4-flash',
         messages: [
           { role: 'system', content: PROMPT_SISTEMA },
-          { role: 'user',   content: resumen.slice(0, 800) },
+          { role: 'user',   content: resumen },
         ],
         temperature: 0,
         max_tokens: 50,
@@ -195,7 +195,7 @@ async function clasificarConGroq(resumen, intento = 1) {
         model: 'llama-3.3-70b-versatile',
         messages: [
           { role: 'system', content: PROMPT_SISTEMA },
-          { role: 'user',   content: resumen.slice(0, 800) },
+          { role: 'user',   content: resumen },
         ],
         temperature: 0,
         max_tokens: 50,
@@ -231,7 +231,7 @@ async function clasificarConOpenAI(resumen, intento = 1) {
         model: 'gpt-4o',
         messages: [
           { role: 'system', content: PROMPT_SISTEMA },
-          { role: 'user',   content: resumen.slice(0, 800) },
+          { role: 'user',   content: resumen },
         ],
         temperature: 0,
         max_tokens: 50,
