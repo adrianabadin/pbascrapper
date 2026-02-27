@@ -3,6 +3,7 @@
  * Diseñado para correr después del scraping masivo, con rate limiting conservador.
  *
  * Uso: node scraper/clasificador.js
+ *       node scraper/clasificador.js --revisar-administrativo
  *
  * Variables de entorno:
  *   ZHIPU_API_KEY         — requerida
@@ -27,12 +28,14 @@ const BATCH_SIZE      = parseInt(process.env.CLASSIFY_BATCH_SIZE || '100');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
+const MODO_REVISAR_ADMIN = process.argv.includes('--revisar-administrativo');
+
 const CATEGORIAS = [
   'urbanismo', 'medio_ambiente', 'salud', 'educacion', 'tributos',
   'seguridad', 'obras_publicas', 'empleo', 'municipal', 'civil',
   'administrativo', 'transporte', 'vivienda', 'agropecuario',
   'derechos_sociales', 'presupuesto',
-  'SIN_CLASIFICAR',
+  'sin_clasificar',
 ];
 
 // Sinónimos / variantes con acento que el modelo puede devolver → categoría canónica
@@ -154,7 +157,7 @@ Ejemplos:
 ### Si el resumen es genérico o ambiguo:
 - Selecciona hasta 2 categorías que capturen diferentes aspectos
 - Sé lo más específico posible con la información disponible
-- Usa "administrativo" como categoría predeterminada si no hay suficiente información
+- Si realmente no hay suficiente información para clasificar, responde ÚNICAMENTE con: SIN_CLASIFICAR
 
 # RESUMEN A CLASIFICAR
 ${resumen.slice(0, 800)}
@@ -249,7 +252,7 @@ Ejemplos:
 ### Si el resumen es genérico o ambiguo:
 - Selecciona hasta 2 categorías que capturen diferentes aspectos
 - Sé lo más específico posible con la información disponible
-- Usa "administrativo" como categoría predeterminada si no hay suficiente información
+- Si realmente no hay suficiente información para clasificar, responde ÚNICAMENTE con: SIN_CLASIFICAR
 
 # RESUMEN A CLASIFICAR
 ${resumen.slice(0, 800)}
@@ -340,7 +343,7 @@ Ejemplos:
 ### Si el resumen es genérico o ambiguo:
 - Selecciona hasta 2 categorías que capturen diferentes aspectos
 - Sé lo más específico posible con la información disponible
-- Usa "administrativo" como categoría predeterminada si no hay suficiente información
+- Si realmente no hay suficiente información para clasificar, responde ÚNICAMENTE con: SIN_CLASIFICAR
 
 # RESUMEN A CLASIFICAR
 ${resumen.slice(0, 800)}
@@ -375,25 +378,29 @@ ${resumen.slice(0, 800)}
 }
 
 async function clasificarConFallback(resumen) {
-  try {
-    return await clasificarConZhipu(resumen);
-  } catch (err) {
-    console.log(`    [zhipu] ❌ Falló: ${err.message}`);
+  const proveedores = [
+    { nombre: 'zhipu',  fn: clasificarConZhipu },
+    { nombre: 'groq',   fn: clasificarConGroq },
+    { nombre: 'openai', fn: clasificarConOpenAI },
+  ];
+
+  for (const { nombre, fn } of proveedores) {
+    try {
+      const resultado = await fn(resumen);
+      // Si el modelo devolvió solo sin_clasificar, probar con el siguiente
+      const catsSinSC = resultado.categorias.filter(c => c !== 'sin_clasificar');
+      if (catsSinSC.length === 0) {
+        process.stdout.write(` [${nombre}: sin_clasificar, probando siguiente]`);
+        continue;
+      }
+      resultado.categorias = catsSinSC;
+      return resultado;
+    } catch (err) {
+      console.log(`    [${nombre}] ❌ Falló: ${err.message}`);
+    }
   }
 
-  try {
-    return await clasificarConGroq(resumen);
-  } catch (err) {
-    console.log(`    [groq] ❌ Falló: ${err.message}`);
-  }
-
-  try {
-    return await clasificarConOpenAI(resumen);
-  } catch (err) {
-    console.log(`    [openai] ❌ Falló: ${err.message}`);
-  }
-
-  return { categorias: ['NO_CLASIFICADO'], proveedor: 'reclasificación' };
+  return { categorias: ['sin_clasificar'], proveedor: 'fallback_agotado' };
 }
 
 async function obtenerPendientes(limite) {
@@ -413,40 +420,68 @@ async function obtenerPendientes(limite) {
   return rows;
 }
 
+async function obtenerSoloAdministrativo(limite) {
+  const { rows } = await pool.query(`
+    SELECT id, tipo, numero, anio, resumen
+    FROM normas
+    WHERE resumen IS NOT NULL
+      AND resumen != ''
+      AND area_tematica = ARRAY['administrativo']
+    ORDER BY anio DESC, tipo
+    LIMIT $1
+  `, [limite]);
+  return rows;
+}
+
 async function main() {
   if (!ZHIPU_API_KEY && !GROQ_API_KEY && !OPENAI_API_KEY) {
     console.error('❌ Se requiere al menos una API key configurada en .env (ZHIPU_API_KEY, GROQ_API_KEY u OPENAI_API_KEY)');
     process.exit(1);
   }
   
-  // Total pendientes
-  const { rows: [{ total }] } = await pool.query(`
-    SELECT COUNT(*) as total FROM normas
-    WHERE resumen IS NOT NULL AND resumen != ''
-      AND (area_tematica IS NULL OR array_length(area_tematica, 1) IS NULL)
-  `);
+  // Determinar modo y query de conteo según flag
+  const obtenerNormas = MODO_REVISAR_ADMIN ? obtenerSoloAdministrativo : obtenerPendientes;
+  const sqlConteo = MODO_REVISAR_ADMIN
+    ? `SELECT COUNT(*) as total FROM normas
+       WHERE resumen IS NOT NULL AND resumen != ''
+         AND area_tematica = ARRAY['administrativo']`
+    : `SELECT COUNT(*) as total FROM normas
+       WHERE resumen IS NOT NULL AND resumen != ''
+         AND (area_tematica IS NULL OR array_length(area_tematica, 1) IS NULL)`;
   
-  console.log('=== CLASIFICADOR DIFERIDO ===');
+  const { rows: [{ total }] } = await pool.query(sqlConteo);
+  
+  const modo = MODO_REVISAR_ADMIN ? 'REVISAR SOLO-ADMINISTRATIVO' : 'CLASIFICADOR DIFERIDO';
+  console.log(`=== ${modo} ===`);
   console.log(`Zhipu:    ${ZHIPU_API_KEY ? '✓' : '✗'} (glm-4-flash)`);
   console.log(`Groq:      ${GROQ_API_KEY ? '✓' : '✗'} (llama-3.3-70b-versatile)`);
   console.log(`OpenAI:    ${OPENAI_API_KEY ? '✓' : '✗'} (gpt-4o)`);
   console.log(`Delay:     ${DELAY_MS}ms entre llamadas (~${Math.round(60000/DELAY_MS)} RPM)`);
-  console.log(`Pendientes: ${total} normas sin clasificar\n`);
+  if (MODO_REVISAR_ADMIN) {
+    console.log(`Objetivo:  reclasificar ${total} normas con solo ['administrativo']\n`);
+  } else {
+    console.log(`Pendientes: ${total} normas sin clasificar\n`);
+  }
   
-  if (total === 0) {
-    console.log('✅ Todas las normas ya están clasificadas.');
+  if (parseInt(total) === 0) {
+    console.log(MODO_REVISAR_ADMIN
+      ? '✅ No hay normas con solo ["administrativo"] para revisar.'
+      : '✅ Todas las normas ya están clasificadas.');
     await pool.end();
     return;
   }
   
   let procesados = 0;
   let clasificados = 0;
+  let mantuvieron = 0;
   let errores = 0;
   
   while (!shutdown) {
-    const normas = await obtenerPendientes(BATCH_SIZE);
+    const normas = await obtenerNormas(BATCH_SIZE);
     if (normas.length === 0) {
-      console.log('\n✅ No quedan normas sin clasificar.');
+      console.log(MODO_REVISAR_ADMIN
+        ? '\n✅ No quedan normas solo-administrativo por revisar.'
+        : '\n✅ No quedan normas sin clasificar.');
       break;
     }
     
@@ -464,10 +499,16 @@ async function main() {
           'UPDATE normas SET area_tematica = $1 WHERE id = $2',
           [categorias, norma.id]
         );
-        process.stdout.write(`[${categorias.join(', ')}] (${proveedor})\n`);
-        clasificados++;
+        
+        if (MODO_REVISAR_ADMIN && categorias.length === 1 && categorias[0] === 'administrativo') {
+          process.stdout.write(`[administrativo] (${proveedor}) = sin cambio\n`);
+          mantuvieron++;
+        } else {
+          process.stdout.write(`[${categorias.join(', ')}] (${proveedor})\n`);
+          clasificados++;
+        }
       } else {
-        process.stdout.write(`[NO_CLASIFICADO] (reclasificación)\n`);
+        process.stdout.write(`[SIN_CLASIFICAR] (${proveedor})\n`);
         errores++;
       }
       
@@ -485,9 +526,12 @@ async function main() {
   }
   
   console.log(`\n✅ Clasificador terminado.`);
-  console.log(`   Procesadas:  ${procesados}`);
-  console.log(`   Clasificadas: ${clasificados}`);
-  console.log(`   Sin categoría: ${errores}`);
+  console.log(`   Procesadas:    ${procesados}`);
+  console.log(`   Reclasificadas: ${clasificados}`);
+  if (MODO_REVISAR_ADMIN) {
+    console.log(`   Mantuvieron:    ${mantuvieron} (legítimamente administrativo)`);
+  }
+  console.log(`   Sin categoría:  ${errores}`);
   await pool.end();
 }
 
